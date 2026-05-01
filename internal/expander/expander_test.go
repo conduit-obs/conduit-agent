@@ -283,10 +283,9 @@ func TestExpand_TransformLogs_DefaultsSeverityToInfo(t *testing.T) {
 
 // Container-native profiles (docker, k8s) flip the OTLP listen addresses
 // to 0.0.0.0 so peer containers / pods in the same network can reach the
-// agent. Both are fragment-less in V0/M5.A — k8s gets its kubelet +
-// filelog + k8sattributes fragment set in M5.B once the chart's RBAC and
-// DaemonSet host-mounts are in place. Host modes stay on 127.0.0.1 so a
-// stock host install does not silently expose OTLP to the local network.
+// agent. Host modes stay on 127.0.0.1 (asserted by
+// TestExpand_HostProfiles_BindLoopback below) so a stock host install
+// does not silently expose OTLP to the local network.
 func TestExpand_ContainerProfiles_BindAllInterfaces(t *testing.T) {
 	cases := []struct {
 		name string
@@ -305,17 +304,128 @@ func TestExpand_ContainerProfiles_BindAllInterfaces(t *testing.T) {
 				`endpoint: 0.0.0.0:4317`,
 				`endpoint: 0.0.0.0:4318`,
 			})
-			// Container profiles ship no platform fragment receivers in
-			// V0/M5.A — only OTLP and the always-on processors run.
-			mustNotContain(t, out, []string{
-				`hostmetrics:`,
-				`filelog/system:`,
-				`journald:`,
-				`kubeletstats:`,
-			})
+		})
+	}
+}
+
+// docker is intentionally fragment-less in V0: scraping host metrics
+// from inside a container needs /proc and /sys bind mounts the user
+// must opt into at run time, so the docker profile only changes OTLP
+// bind behavior and leaves receiver pipelines OTLP-only.
+func TestExpand_DockerProfile_NoPlatformFragments(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeDocker}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{
+		`hostmetrics:`,
+		`filelog/system:`,
+		`journald:`,
+		`kubeletstats:`,
+		`filelog/k8s:`,
+		`k8sattributes:`,
+	})
+	for _, p := range []string{"traces", "metrics", "logs"} {
+		if got := pipelineReceivers(t, out, p); !equalSet(got, []string{"otlp"}) {
+			t.Errorf("%s pipeline should only have otlp under docker profile; got %v", p, got)
+		}
+	}
+}
+
+// k8s ships three fragments (hostmetrics + kubeletstats + filelog/k8s)
+// and the k8sattributes processor — the per-node DaemonSet half of the
+// Kubernetes story. The chart in deploy/helm/conduit-agent provides
+// the matching DaemonSet host mounts and ClusterRole RBAC in M5.C.
+func TestExpand_K8sProfile_LoadsFragments(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeK8s}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	// The three k8s receivers are spliced into receivers:.
+	mustContain(t, out, []string{
+		`hostmetrics:`,
+		`kubeletstats:`,
+		`endpoint: ${env:K8S_NODE_NAME}:10250`,
+		`auth_type: serviceAccount`,
+		`filelog/k8s:`,
+		`/var/log/pods/*/*/*.log`,
+		`type: container`,
+	})
+	// Linux-only fragments must not appear under k8s.
+	mustNotContain(t, out, []string{
+		`filelog/system:`,
+		`journald:`,
+	})
+	// hostmetrics + kubeletstats land on the metrics pipeline; filelog/k8s
+	// on the logs pipeline; traces stays otlp-only because the k8s
+	// receivers carry no traces.
+	if got := pipelineReceivers(t, out, "traces"); !equalSet(got, []string{"otlp"}) {
+		t.Errorf("traces pipeline under k8s profile should be otlp-only; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "hostmetrics", "kubeletstats"}) {
+		t.Errorf("metrics pipeline under k8s profile = %v; want [otlp hostmetrics kubeletstats]", got)
+	}
+	if got := pipelineReceivers(t, out, "logs"); !equalSet(got, []string{"otlp", "filelog/k8s"}) {
+		t.Errorf("logs pipeline under k8s profile = %v; want [otlp filelog/k8s]", got)
+	}
+}
+
+// k8sattributes is the processor that turns "OTLP from a peer pod" into
+// "OTLP from a peer pod, tagged with k8s.deployment.name / k8s.pod.name
+// / k8s.namespace.name". It must run on every pipeline so traces and
+// metrics from instrumented apps benefit, not just the chart-shipped
+// container logs. Position matters: after resourcedetection so host
+// identity is established first; before resource so the user's explicit
+// conduit.yaml service.name still wins.
+func TestExpand_K8sProfile_AddsK8sAttributesProcessor(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeK8s}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`k8sattributes:`,
+		`node_from_env_var: K8S_NODE_NAME`,
+		`- k8s.namespace.name`,
+		`- k8s.deployment.name`,
+		`- from: connection`,
+	})
+	for _, p := range []string{"traces", "metrics", "logs"} {
+		got := pipelineProcessors(t, out, p)
+		if !contains(got, "k8sattributes") {
+			t.Errorf("%s pipeline missing k8sattributes processor; got %v", p, got)
+		}
+		if !ordered(got, "resourcedetection", "k8sattributes") {
+			t.Errorf("%s pipeline must run resourcedetection before k8sattributes; got %v", p, got)
+		}
+		if !ordered(got, "k8sattributes", "resource") {
+			t.Errorf("%s pipeline must run k8sattributes before resource (so user's resource: block wins); got %v", p, got)
+		}
+	}
+}
+
+// Host-mode profiles must not pull in the k8sattributes processor —
+// they have no Kubernetes API client / RBAC and the receiver wouldn't
+// know which pod a signal came from anyway.
+func TestExpand_NonK8sProfiles_NoK8sAttributesProcessor(t *testing.T) {
+	cases := []struct {
+		name string
+		mode config.ProfileMode
+	}{
+		{"none", config.ProfileModeNone},
+		{"linux", config.ProfileModeLinux},
+		{"darwin", config.ProfileModeDarwin},
+		{"docker", config.ProfileModeDocker},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Expand(honeycomb(&config.Profile{Mode: tc.mode}))
+			if err != nil {
+				t.Fatalf("Expand: %v", err)
+			}
+			mustNotContain(t, out, []string{`k8sattributes:`})
 			for _, p := range []string{"traces", "metrics", "logs"} {
-				if got := pipelineReceivers(t, out, p); !equalSet(got, []string{"otlp"}) {
-					t.Errorf("%s pipeline should only have otlp under %s profile; got %v", p, tc.name, got)
+				if got := pipelineProcessors(t, out, p); contains(got, "k8sattributes") {
+					t.Errorf("%s pipeline under %s profile must not include k8sattributes; got %v", p, tc.name, got)
 				}
 			}
 		})
@@ -540,6 +650,26 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// ordered reports whether earlier appears before later in xs. Both must
+// be present; if either is missing the function returns false so callers
+// can use it as a single assertion. Used to enforce processor ordering
+// (resourcedetection must run before k8sattributes, k8sattributes before
+// resource, etc.).
+func ordered(xs []string, earlier, later string) bool {
+	earlyIdx, lateIdx := -1, -1
+	for i, s := range xs {
+		switch s {
+		case earlier:
+			if earlyIdx == -1 {
+				earlyIdx = i
+			}
+		case later:
+			lateIdx = i
+		}
+	}
+	return earlyIdx != -1 && lateIdx != -1 && earlyIdx < lateIdx
 }
 
 func equalSet(a, b []string) bool {

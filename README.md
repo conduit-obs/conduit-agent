@@ -22,10 +22,11 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M4.B** | Docker profile (`profile.mode=docker`), self-contained `Dockerfile`, in-image default config, runnable compose example | done |
 | **M4.C** | Multi-arch (amd64 + arm64) image build wired in `.goreleaser.yaml` for `ghcr.io/conduit-obs/conduit-agent` | done (publishing CI workflow lands at M12) |
 | **M5.A** | `profile.mode: k8s` schema knob (binds OTLP to `0.0.0.0`); Helm chart skeleton at [`deploy/helm/conduit-agent/`](deploy/helm/conduit-agent/README.md): DaemonSet, ConfigMap, ServiceAccount, Service, optional Secret | done |
+| **M5.B** | `profile.mode: k8s` defaults: per-node `hostmetrics`, `kubeletstats` against the local kubelet, `filelog/k8s` for `/var/log/pods/*` (with the upstream `container` operator), and `k8sattributes` enrichment on every pipeline. See [`internal/profiles/k8s/`](internal/profiles/k8s/README.md). | done |
 
 The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
 
-M5 ships in slices, mirroring the Linux / Docker pattern: M5.A (this milestone) is the **chart skeleton + schema knob** — `helm install` works as an OTLP relay, but the kubelet / container-log / `k8sattributes` defaults that make the chart actually Kubernetes-aware land in M5.B, with the matching ClusterRole / DaemonSet host mounts in M5.C, OCI publishing in M5.D, and the default board in M5.E. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
+M5 ships in slices, mirroring the Linux / Docker pattern: M5.A is the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B (this milestone) wires the **kubelet / container-log / `k8sattributes` defaults** that make `profile.mode=k8s` actually Kubernetes-aware. M5.C lands the matching ClusterRole + DaemonSet host mounts so the new fragments stop hitting RBAC walls / empty `/proc`, M5.D ships OCI chart publishing, and M5.E ships the default cluster + workload boards. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
 You can run, against any conduit.yaml:
 
@@ -112,13 +113,16 @@ through the cluster Service. Each pod also exposes the `health_check`
 extension at `:13133` for liveness / readiness probes (the chart wires
 both probes against it automatically).
 
-M5.A is the **chart skeleton** — the DaemonSet, ConfigMap, ServiceAccount,
-and Service all install cleanly, but the chart's default profile does
-not yet ship the kubelet metrics, container log filelog, or
-`k8sattributes` enrichment that make it actually Kubernetes-aware.
-Those land in M5.B (chart version 0.1.x); the matching ClusterRole +
-DaemonSet host mounts in M5.C; OCI publishing of the chart in M5.D;
-and `dashboards/k8s-cluster-overview.json` in M5.E.
+M5.A + M5.B are landed: the DaemonSet ships per-node `hostmetrics`,
+`kubeletstats` against the local kubelet, `filelog/k8s` for
+`/var/log/pods/*`, and the `k8sattributes` processor on every pipeline
+so OTLP signals from instrumented apps in the cluster also pick up
+Kubernetes workload metadata. The chart's ClusterRole RBAC and
+DaemonSet host bind mounts that the new fragments need land in
+M5.C — until then `kubeletstats` will hit RBAC errors and
+`hostmetrics` will report the pod's view of `/proc` instead of the
+node's. OCI publishing of the chart lands in M5.D; the default cluster
++ workload boards in M5.E.
 
 For values reference, RBAC plan, and gateway egress, see
 [`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).
@@ -176,13 +180,13 @@ Out of the box (omit `profile:` from your conduit.yaml entirely), Conduit detect
 
 | Fragment | Linux | macOS (darwin) | Windows | Docker | Kubernetes |
 |---|---|---|---|---|---|
-| `hostmetrics` (CPU / memory / load / disk / filesystem / network) | yes | yes | M6 | M9 (needs bind mounts) | M5.B (per-node via DaemonSet) |
-| `hostmetrics` (paging / processes) | yes | no (privilege-sensitive on darwin) | M6 | M9 | M5.B |
+| `hostmetrics` (CPU / memory / load / disk / filesystem / network) | yes | yes | M6 | M9 (needs bind mounts) | yes (per-node via DaemonSet; needs chart bind mounts in M5.C) |
+| `hostmetrics` (paging / processes) | yes | no (privilege-sensitive on darwin) | M6 | M9 | yes (M5.C bind mounts) |
 | `filelog/system` — `/var/log/{syslog,messages,auth.log,secure}` | yes | — | — | — | — |
 | `filelog/system` — `/var/log/{system,install}.log` | — | yes | — | — | — |
 | `journald` (systemd unified journal) | yes | — | — | — | — |
-| `kubeletstats` (pod / container CPU + memory) | — | — | — | — | M5.B |
-| `filelog` of `/var/log/containers/*.log` + `k8sattributes` enrichment | — | — | — | — | M5.B |
+| `kubeletstats` (pod / container CPU + memory) | — | — | — | — | yes (needs chart RBAC in M5.C) |
+| `filelog/k8s` of `/var/log/pods/*` + `k8sattributes` enrichment | — | — | — | — | yes |
 
 The hostmetrics scrapers also enable the `*.utilization` metrics that upstream ships disabled by default — `system.cpu.utilization`, `system.memory.utilization`, `system.filesystem.utilization`, and (Linux only) `system.paging.utilization`. These are 0..1 fractions computed alongside the byte-level metrics, so dashboards can plot percent-used directly instead of dividing the raw `system.filesystem.usage` bytes by the total themselves.
 
@@ -191,11 +195,11 @@ Knobs:
 ```yaml
 profile:
   mode: auto          # auto | linux | darwin | docker | k8s | none (default: auto)
-  host_metrics: true  # default true unless mode=none / mode=docker / mode=k8s (M5.A)
-  system_logs: true   # default true unless mode=none / mode=docker / mode=k8s (M5.A)
+  host_metrics: true  # default true unless mode=none / mode=docker
+  system_logs: true   # default true unless mode=none / mode=docker
 ```
 
-`mode: none` reverts to the M2 OTLP-only behavior. `mode: linux` / `mode: darwin` force a profile regardless of the host OS — useful in containers or when developing a Linux config on a Mac. `mode: docker` and `mode: k8s` are the container-native shapes: no platform fragment receivers in V0/M5.A (kubelet + container-log defaults land in M5.B for `k8s`), but OTLP listens on `0.0.0.0` instead of `127.0.0.1` so peer containers / pods can reach the agent (see "OTLP bind address" below). On a runtime.GOOS without a fragment set (today: anything not linux or darwin), `auto` falls back to `none` and writes a one-line warning to stderr.
+`mode: none` reverts to the M2 OTLP-only behavior. `mode: linux` / `mode: darwin` force a profile regardless of the host OS — useful in containers or when developing a Linux config on a Mac. `mode: docker` and `mode: k8s` are the container-native shapes — both flip OTLP receivers to `0.0.0.0` so peer containers / pods can reach the agent (see "OTLP bind address" below). `docker` ships no platform fragment receivers in V0 (M9 will pick the host-metrics-from-container default once the bind-mount story is settled). `k8s` ships per-node `hostmetrics`, `kubeletstats` against the local kubelet, `filelog/k8s` for container logs, and the `k8sattributes` processor on every pipeline. On a runtime.GOOS without a fragment set (today: anything not linux or darwin), `auto` falls back to `none` and writes a one-line warning to stderr.
 
 The fragment YAML lives under [`internal/profiles/<goos>/`](internal/profiles/) — each file is plain upstream OTel Collector receiver config that the expander splices into the rendered pipeline.
 

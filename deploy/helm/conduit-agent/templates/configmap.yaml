@@ -31,6 +31,9 @@ data:
     {{- end }}
 
     profile:
-      # M5.A only ships profile.mode=k8s as the OTLP-bind=0.0.0.0 knob;
-      # kubelet / filelog / k8sattributes receivers land in M5.B.
+      # profile.mode=k8s ships per-node hostmetrics + kubeletstats +
+      # filelog/k8s and turns on the k8sattributes processor on every
+      # pipeline. See internal/profiles/k8s/README.md for the receivers
+      # this enables; M5.C lands the matching ClusterRole and DaemonSet
+      # host bind mounts that hostmetrics + kubeletstats need.
       mode: {{ .Values.conduit.profileMode | quote }}

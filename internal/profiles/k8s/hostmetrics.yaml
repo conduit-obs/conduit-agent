@@ -1,0 +1,48 @@
+# Kubernetes default host-metrics profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the metrics pipeline alongside otlp + kubeletstats. The shape mirrors the
+# Linux profile (same scrapers, same *.utilization opt-ins) because a
+# DaemonSet pod's view of the node — once /proc, /sys, /var/run, and the
+# host root are bind-mounted in — is identical to a Linux host install's.
+#
+# The Helm chart in deploy/helm/conduit-agent ships those bind mounts in
+# M5.C; until then the host-level scrapers in this fragment have nothing
+# useful to read and the kubelet receiver in kubelet.yaml carries the
+# pod / container metrics on its own.
+#
+# What this gives operators:
+#   - Per-node CPU / memory / load / disk / filesystem / network /
+#     paging / processes scraped at 60s.
+#   - Each scraper's *.utilization metric (0..1 fraction) enabled
+#     so dashboards plot percent-used directly across heterogeneous
+#     node SKUs without dividing bytes by total in the query layer.
+#
+# Together with kubeletstats (per-pod / per-container) and
+# filelog/k8s (container logs), this fragment covers the per-node
+# half of the four pillars; cluster-scope metrics (deployments,
+# replicasets, node conditions) live behind k8sclusterreceiver and
+# ship in a future single-replica Deployment, not this DaemonSet.
+hostmetrics:
+  collection_interval: 60s
+  scrapers:
+    cpu:
+      metrics:
+        system.cpu.utilization:
+          enabled: true
+    memory:
+      metrics:
+        system.memory.utilization:
+          enabled: true
+    load:
+    disk:
+    filesystem:
+      metrics:
+        system.filesystem.utilization:
+          enabled: true
+    network:
+    paging:
+      metrics:
+        system.paging.utilization:
+          enabled: true
+    processes:

@@ -2,13 +2,15 @@
 
 DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
 
-> **Status — M5.A skeleton.** This is the chart shape — the M5.A slice ships
-> the DaemonSet, ConfigMap, ServiceAccount, Service, and an optional Secret,
-> all wired around an OTLP-only `profile.mode: k8s`. The kubelet metrics,
-> container log filelog, and `k8sattributes` enrichment defaults land in
-> M5.B; the matching ClusterRole / ClusterRoleBinding lands in M5.C; chart
-> publishing to `oci://ghcr.io/conduit-obs/charts/conduit-agent` lands in
-> M5.D.
+> **Status — M5.A skeleton + M5.B fragments.** The chart ships the DaemonSet,
+> ConfigMap, ServiceAccount, Service, and an optional Secret. Default
+> `profile.mode: k8s` ships per-node `hostmetrics`, `kubeletstats` against
+> the local kubelet, `filelog/k8s` for `/var/log/pods/*`, and the
+> `k8sattributes` processor on every pipeline. The matching ClusterRole +
+> DaemonSet host bind mounts that those receivers need land in M5.C —
+> until then `kubeletstats` will hit RBAC errors and `hostmetrics` will
+> report the pod's view of `/proc` instead of the node's. Chart publishing
+> to `oci://ghcr.io/conduit-obs/charts/conduit-agent` lands in M5.D.
 
 ## What you get
 
@@ -20,11 +22,15 @@ DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
   to `<release>-conduit-agent:4317` / `:4318`.
 - A health-check endpoint on every pod at `:13133` for liveness / readiness
   probes.
-- A `ServiceAccount` per release. (M5.A's chart does **not** bind any
-  ClusterRole — the default profile does not yet read from the kubelet or
-  Kubernetes API. M5.C adds that once M5.B's receivers ship.)
+- Per-node host metrics + per-pod / per-container kubelet stats +
+  container logs spliced into the matching pipelines, with every signal
+  enriched with Kubernetes workload metadata (`k8s.namespace.name`,
+  `k8s.pod.name`, `k8s.deployment.name`, ...).
+- A `ServiceAccount` per release. The chart does **not** yet bind a
+  ClusterRole — `kubeletstats` and `k8sattributes` will surface RBAC
+  errors in their logs until M5.C ships the matching role + role binding.
 
-## Install (M5.A — local source)
+## Install (M5.A/B — local source)
 
 The chart is not yet published. Install from a clone:
 
@@ -88,7 +94,7 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `gateway.endpoint` | `""` | OTLP/gRPC URL of the gateway. Required when `gateway.enabled=true`. |
 | `image.repository` | `ghcr.io/conduit-obs/conduit-agent` | OCI image (per ADR-0019). |
 | `image.tag` | `""` (falls back to `Chart.appVersion`) | Pin a specific agent build. |
-| `daemonset.resources` | `requests: 50m / 96Mi`, `limits: 500m / 384Mi` | Sized for the OTLP-only V0 pipeline. Bump in M5.B once kubelet + filelog scrapers add load. |
+| `daemonset.resources` | `requests: 50m / 96Mi`, `limits: 500m / 384Mi` | Sized for the OTLP relay path; the M5.B kubelet + filelog scrapers add modest steady-state load (single-digit % CPU per pod, ~50 MiB extra RSS on a busy node). Bump if memory_limiter starts dropping batches. |
 | `daemonset.tolerations` | `[{operator: Exists}]` | Wide-open by default so the agent runs on system / GPU nodes too. Tighten for high-security clusters. |
 | `serviceAccount.create` | `true` | Set false to bind the DaemonSet to an external SA. |
 | `service.enabled` | `true` | Cluster-internal Service for OTLP ingress. |

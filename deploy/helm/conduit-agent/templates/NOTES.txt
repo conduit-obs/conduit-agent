@@ -25,9 +25,12 @@ Output: customer-operated OTLP gateway at {{ .Values.gateway.endpoint }}.
 
 Profile mode: {{ .Values.conduit.profileMode }}.
 {{- if eq .Values.conduit.profileMode "k8s" }}
-M5.A's k8s profile only flips the OTLP bind to 0.0.0.0 so peer pods can
-reach the agent. The kubelet / container-log / k8sattributes receivers
-land in M5.B (chart version 0.1.x).
+The k8s profile ships per-node hostmetrics, kubeletstats against the
+local kubelet, filelog/k8s for /var/log/pods/*, and the k8sattributes
+processor enriching every pipeline. M5.C will land the matching
+ClusterRole + DaemonSet host bind mounts; until then expect RBAC errors
+from kubeletstats / k8sattributes and a pod-scoped (not node-scoped)
+view from hostmetrics.
 {{- end }}
 
 Send a test trace
@@ -51,5 +54,5 @@ Probe pod liveness:
 
 Next steps
 ----------
-- internal/profiles/k8s/README.md (M5.B) will document the kubelet +
-  filelog + k8sattributes defaults once they ship.
+- internal/profiles/k8s/README.md documents the kubelet + filelog +
+  k8sattributes defaults and the M5.C host-mount / RBAC dependencies.

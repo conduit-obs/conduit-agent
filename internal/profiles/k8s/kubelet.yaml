@@ -1,0 +1,29 @@
+# Kubernetes kubelet stats profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the metrics pipeline. Scrapes the local node's kubelet on :10250 for
+# per-node, per-pod, and per-container CPU and memory.
+#
+# Why kubeletstats vs the cluster-wide cAdvisor metrics endpoint:
+#   - The DaemonSet runs one pod per node, so every kubelet is local —
+#     no cross-node API hops, lower latency, lower kubelet load.
+#   - Authentication uses the pod's ServiceAccount via Conduit's
+#     ClusterRole (granted in M5.C), matching the principle of "pods
+#     present what they are, not what they impersonate".
+#   - filter via K8S_NODE_NAME from the downward API (set by the chart's
+#     DaemonSet, see deploy/helm/conduit-agent/templates/daemonset.yaml)
+#     keeps the receiver scoped to the local node.
+#
+# insecure_skip_verify is on because most clusters give kubelets
+# self-signed serving certs that aren't reachable from the cluster's
+# trust bundle. Operators with a managed kubelet PKI should drop this
+# flag via overrides: in their conduit.yaml.
+kubeletstats:
+  collection_interval: 60s
+  auth_type: serviceAccount
+  endpoint: ${env:K8S_NODE_NAME}:10250
+  insecure_skip_verify: true
+  metric_groups:
+    - node
+    - pod
+    - container

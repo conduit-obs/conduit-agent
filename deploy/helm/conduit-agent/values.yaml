@@ -1,11 +1,16 @@
-# Default values for conduit-agent (M5.A skeleton).
+# Default values for conduit-agent.
 #
-# This file documents every knob the chart exposes. Values are
-# intentionally narrow in M5.A — kubelet metrics, container log filelog,
-# and k8sattributes enrichment land in M5.B once the matching profile
-# fragments and RBAC arrive. For now the chart deploys an OTLP-only
-# DaemonSet that accepts OTLP from peer pods at conduit-agent:4317 / :4318
-# and forwards to Honeycomb (or a customer-operated gateway).
+# This file documents every knob the chart exposes. The chart deploys a
+# DaemonSet that runs the M5.B Kubernetes profile: per-node hostmetrics,
+# kubeletstats against the local kubelet, filelog/k8s for container logs,
+# and the k8sattributes processor enriching every pipeline. OTLP is also
+# accepted from peer pods at conduit-agent:4317 / :4318 and gets the same
+# Kubernetes metadata enrichment.
+#
+# The matching ClusterRole + DaemonSet host bind mounts that kubeletstats
+# and hostmetrics need land in M5.C; until then expect RBAC errors from
+# kubeletstats / k8sattributes and pod-scoped (not node-scoped) views
+# from hostmetrics.
 
 # ---------------------------------------------------------------------------
 # Honeycomb output. Required for the default values; switch to `gateway`
@@ -59,9 +64,13 @@ conduit:
   # "staging", "us-east-1".
   deploymentEnvironment: production
 
-  # profile.mode in conduit.yaml. M5.A only ships profile.mode=k8s as the
-  # OTLP-bind=0.0.0.0 knob; the kubelet / filelog / k8sattributes fragment
-  # set lands in M5.B.
+  # profile.mode in conduit.yaml. With profileMode=k8s the chart's pod
+  # ships per-node hostmetrics + kubeletstats + filelog/k8s and the
+  # k8sattributes processor on every pipeline (see
+  # internal/profiles/k8s/README.md). The matching ClusterRole + host
+  # mounts land in M5.C; until then kubeletstats / k8sattributes will
+  # surface RBAC errors and hostmetrics will report the pod's view of
+  # /proc instead of the node's.
   #
   # Valid values: auto | linux | darwin | docker | k8s | none.
   profileMode: k8s
@@ -82,10 +91,11 @@ image:
 # DaemonSet shape.
 # ---------------------------------------------------------------------------
 daemonset:
-  # Resources sized for the OTLP-only V0 pipeline. Bump in M5.B when
-  # kubeletstats + filelog scrapers add load. Numbers are conservative
-  # starting points; tune from your cluster's `kubectl top pod` once the
-  # agent is running.
+  # Resources sized for the M5.B receiver set: hostmetrics +
+  # kubeletstats + filelog/k8s + the k8sattributes processor. Numbers
+  # are conservative starting points; tune from your cluster's
+  # `kubectl top pod` once the agent is running. Bump if memory_limiter
+  # starts dropping batches in the pod logs.
   resources:
     requests:
       cpu: 50m
@@ -128,10 +138,11 @@ daemonset:
   dnsPolicy: ClusterFirstWithHostNet
 
 # ---------------------------------------------------------------------------
-# RBAC. M5.A's chart does not need cluster-scoped permissions because the
-# default profile (mode=k8s) ships no kubelet / k8sattributes receivers
-# yet. M5.C adds the ClusterRole + ClusterRoleBinding once those receivers
-# arrive in M5.B.
+# RBAC. The M5.B receivers (kubeletstats, k8sattributes) need
+# cluster-scoped read access to nodes/stats and pods, but the chart does
+# not yet ship a ClusterRole — that lands in M5.C alongside the matching
+# DaemonSet host bind mounts. Until then the agent will log RBAC errors
+# from those components on startup.
 # ---------------------------------------------------------------------------
 serviceAccount:
   create: true

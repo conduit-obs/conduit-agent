@@ -90,10 +90,14 @@ spec:
                   name: {{ include "conduit-agent.honeycombSecretName" . }}
                   key: {{ .Values.honeycomb.existingSecretKey }}
             {{- end }}
-            # K8s_NODE_NAME / POD_NAME / POD_NAMESPACE are wired here so
-            # M5.B's k8sattributes processor (and any future resourceprocessor
-            # rule) can pick them up via ${env:...} without re-templating
-            # the conduit.yaml.
+            # K8S_NODE_NAME / POD_NAME / POD_NAMESPACE come from the
+            # downward API. K8S_NODE_NAME is consumed by kubeletstats
+            # (endpoint: ${env:K8S_NODE_NAME}:10250) and the
+            # k8sattributes processor (filter.node_from_env_var) so the
+            # receiver and processor scope to the local node — without
+            # this, k8sattributes watches every pod in the cluster from
+            # every Conduit replica, scaling API server load with the
+            # node count.
             - name: K8S_NODE_NAME
               valueFrom:
                 fieldRef:

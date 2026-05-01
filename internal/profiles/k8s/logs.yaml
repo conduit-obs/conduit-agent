@@ -1,0 +1,38 @@
+# Kubernetes default container-logs profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the logs pipeline alongside otlp. Tails every pod's container log on the
+# local node (/var/log/pods/<ns>_<pod>_<uid>/<container>/<n>.log — the path
+# layout kubelets have written since 1.14) and lets the upstream container
+# operator auto-detect the on-disk format (CRI / containerd / docker JSON)
+# so a single fragment works across every supported runtime.
+#
+# What add_metadata_from_filepath buys us: the operator parses the path
+# and sets k8s.namespace.name, k8s.pod.name, k8s.pod.uid, and
+# k8s.container.name as resource attributes on every emitted log record
+# — before k8sattributes runs at the processor stage to fill in the
+# higher-level workload metadata (deployment / replicaset / labels).
+#
+# The exclude list keeps Conduit from tailing its own log file (any pod
+# whose name starts with conduit-, in any namespace), which would create
+# a feedback loop where every emitted record produces another log line
+# in the next scrape. The Helm chart's release name is conventionally
+# conduit, giving pods named conduit-conduit-agent-<hash>; the wider
+# conduit-* glob also catches sibling helm releases (e.g.
+# conduit-platform-prod-conduit-agent-<hash>).
+#
+# start_at: end avoids replaying historical logs into Honeycomb on first
+# install. Operators who want a backfill on a particular node can mount
+# the chart-managed checkpoint volume (M9) onto a fresh pod with
+# start_at: beginning in their conduit.yaml override.
+filelog/k8s:
+  include:
+    - /var/log/pods/*/*/*.log
+  exclude:
+    - /var/log/pods/*_conduit-*/*/*.log
+  start_at: end
+  include_file_path: true
+  include_file_name: false
+  operators:
+    - type: container
+      add_metadata_from_filepath: true

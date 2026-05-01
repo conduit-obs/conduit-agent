@@ -19,12 +19,12 @@ Two rules every fragment file must follow:
 | `darwin/` | M3.A | `hostmetrics.yaml` (macOS-safe scraper subset; no `paging` / `processes`), `logs.yaml` (filelog `/var/log/{system,install}.log`) |
 | `windows/` | M6, M9 | Windows Event Log (Application + System), host metrics |
 | `docker/` | M4 (bind only), M9 (host metrics) | M4 ships no fragment files: `profile.mode=docker` only flips OTLP receivers to `0.0.0.0` so peer containers can reach them, while `health_check` stays on `0.0.0.0:13133` from the base template. M9 will add `hostmetrics.yaml` once we land the bind-mount story for `/proc` and `/sys`. See [`docker/README.md`](docker/README.md) for the V0 contract. |
-| `k8s/` | M5.A (bind only), M5.B (kubelet + filelog + k8sattributes), M5.C (RBAC + host mounts) | M5.A ships no fragment files: `profile.mode=k8s` only flips OTLP receivers to `0.0.0.0` so peer pods can reach the DaemonSet through the chart's Service. M5.B adds `hostmetrics.yaml`, `kubelet.yaml`, and `logs.yaml` once the chart's [`deploy/helm/conduit-agent`](../../deploy/helm/conduit-agent/) wires up the matching ClusterRole and DaemonSet host mounts in M5.C. |
+| `k8s/` | M5.B | `hostmetrics.yaml` (per-node CPU/memory/etc, expecting host bind mounts the chart provides in M5.C), `kubelet.yaml` (`kubeletstatsreceiver` against the local kubelet for per-node / per-pod / per-container CPU + memory), `logs.yaml` (`filelog/k8s` tailing `/var/log/pods/*/*/*.log` with the upstream container operator). The `k8sattributes` processor lives in the base template, gated by `profile.mode=k8s`, and runs on every pipeline so OTLP signals from instrumented apps get the same metadata enrichment. |
 | `shared/` | reserved | cross-platform processor / connector defaults; not used in M3.A |
 
 ## Currently shipped signals
 
-`profiles.SignalHostMetrics` (file `hostmetrics.yaml`) and `profiles.SignalSystemLogs` (file `logs.yaml`). Adding a new signal kind (e.g. `kubelet` for M5) means: add a constant to `profiles.go`, document it here, and ship the matching `<platform>/<signal>.yaml` fragments.
+`profiles.SignalHostMetrics` (file `hostmetrics.yaml`), `profiles.SignalSystemLogs` (file `logs.yaml`), and `profiles.SignalKubelet` (file `kubelet.yaml`, k8s-only — host platforms have no analogue). Adding a new signal kind means: add a constant to `profiles.go`, document it here, and ship the matching `<platform>/<signal>.yaml` fragments.
 
 ## See also
 

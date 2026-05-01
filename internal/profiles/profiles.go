@@ -28,20 +28,24 @@ import (
 )
 
 // Signal names every fragment Conduit knows how to load. Adding a new
-// fragment kind (e.g. "kubelet") means adding a constant here, an
-// authoring contract in this package's comments, and the matching .yaml
-// file under each platform directory that supports it.
+// fragment kind means adding a constant here, an authoring contract in
+// this package's comments, and the matching .yaml file under each
+// platform directory that supports it.
 type Signal string
 
 const (
 	// SignalHostMetrics is the hostmetrics receiver fragment for the platform.
 	SignalHostMetrics Signal = "hostmetrics"
 	// SignalSystemLogs is the system-log receiver fragment (filelog and,
-	// where applicable, journald) for the platform.
+	// where applicable, journald) for the platform. On k8s this fragment
+	// holds filelog/k8s rather than journald.
 	SignalSystemLogs Signal = "logs"
+	// SignalKubelet is the kubeletstatsreceiver fragment. Only the k8s
+	// platform ships it today; host platforms have no analogue.
+	SignalKubelet Signal = "kubelet"
 )
 
-//go:embed all:linux all:darwin
+//go:embed all:linux all:darwin all:k8s
 var fragmentsFS embed.FS
 
 // Available reports the platform names for which Conduit ships at least one
