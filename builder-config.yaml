@@ -1,0 +1,82 @@
+# OpenTelemetry Collector Builder (OCB) manifest for Conduit V0.
+#
+# This file is the canonical source of truth for which upstream OTel collector
+# components ship in the Conduit binary. Adding or removing a component is
+# done here, never in generated code under internal/collector/.
+#
+# The Conduit V0 rule is "pure upstream OTel components only; zero custom
+# processors or receivers" (see docs/adr/adr-0004.md). Every entry below pulls
+# from go.opentelemetry.io/collector or github.com/open-telemetry/
+# opentelemetry-collector-contrib. Conduit-specific shaping (Honeycomb header,
+# RED dimension allowlist, redaction patterns) lives in user-provided
+# transformprocessor / spanmetricsconnector configuration rendered by
+# internal/expander, not in custom components.
+#
+# Version pinning (see docs/adr/adr-0014.md): each Conduit MINOR pins to
+# exactly one upstream OTel Collector MINOR.
+#
+# Build flow (see Makefile):
+#   make install-ocb   # one-time download of the OCB binary
+#   make build-ocb     # invokes OCB; writes generated code under ./build/collector
+#   <M2.B>             # post-processing into internal/collector/ (in-flight)
+#   make build         # go build ./bin/conduit (after M2.B)
+
+dist:
+  name: conduit
+  description: Conduit OTel distribution for Honeycomb (V0)
+  module: github.com/conduit-obs/conduit-agent-ocb-output
+  version: 0.0.0-dev
+  output_path: ./build/collector
+  # OCB-generated code is written to ./build/collector/ as a transient artifact.
+  # M2.B will fold it into internal/collector/ with the module path rewritten
+  # under the root module github.com/conduit-obs/conduit-agent.
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlpexporter v0.151.0
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.151.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.151.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.151.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.151.0
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/journaldreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/syslogreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcplogreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/udplogreceiver v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver v0.151.0
+
+connectors:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector v0.151.0
+
+extensions:
+  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.151.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/pprofextension v0.151.0
+
+# Components deliberately excluded from V0 (see docs/adr/adr-0002.md and
+# docs/adr/adr-0004.md):
+#
+#   - routingconnector             V2 — gateway-tier multi-destination fanout
+#   - tailsamplingprocessor        V2 — gateway-tier; Refinery is the V0 path
+#   - awss3exporter                V2 — gateway-tier S3 archival
+#   - loadbalancingexporter        V0 emits OTLP only
+#   - prometheusremotewriteexporter V0 emits OTLP only
+#   - prometheusexporter           V0 emits OTLP only
+#   - any custom Conduit component V0 is pure upstream

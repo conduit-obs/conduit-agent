@@ -1,0 +1,51 @@
+# Linux default system-logs profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the logs pipeline alongside otlp. Two receivers ship today:
+#
+#   - filelog/system tails the canonical /var/log/* files used by Debian/
+#     Ubuntu (syslog, auth.log) and RHEL/CentOS (messages, secure). Files
+#     that don't exist on a given distro are simply skipped by filelog.
+#     start_at: end avoids replaying weeks of historical logs into Honeycomb
+#     on first install.
+#
+#   - journald scrapes the systemd journal with no unit filter (units: [])
+#     so customers get system messages and any service log that journald
+#     captures. Distros without systemd (e.g. Alpine) will report a startup
+#     error; users on those distros should set profile.system_logs=false
+#     and configure filelog explicitly.
+#
+# A redactionprocessor and a more refined include list land in M9.
+filelog/system:
+  include:
+    - /var/log/syslog
+    - /var/log/messages
+    - /var/log/auth.log
+    - /var/log/secure
+  exclude:
+    - /var/log/*.gz
+    - /var/log/*.[0-9]
+    - /var/log/*.[0-9].gz
+  start_at: end
+  # BSD syslog parser. Modern Linux distros still write /var/log/syslog,
+  # /var/log/messages, /var/log/auth.log, and /var/log/secure in this
+  # format ("Mon  D HH:MM:SS host process[pid]: message"). RFC5424 lines
+  # land in journald rather than these files, so a single-format parser
+  # is enough for V0.
+  #
+  # The parsed timestamp + hostname are dropped because filelog's
+  # observed time and resourcedetection's host.name are authoritative.
+  # Lines that don't match are forwarded unparsed (on_error: send).
+  operators:
+    - type: regex_parser
+      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
+      on_error: send
+    - type: remove
+      field: attributes.bsd_ts
+      if: 'attributes.bsd_ts != nil'
+    - type: remove
+      field: attributes.log_host
+      if: 'attributes.log_host != nil'
+
+journald:
+  units: []

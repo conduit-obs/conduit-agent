@@ -1,0 +1,37 @@
+# macOS default system-logs profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the logs pipeline alongside otlp. macOS does not expose its primary
+# system journal (Apple unified logging / os_log) as a flat file, so this
+# profile is intentionally minimal: the two /var/log files that are
+# populated reliably across recent macOS releases.
+#
+# Surfacing os_log entries (via 'log show' / 'log stream') would require a
+# bespoke receiver that doesn't yet exist upstream — tracked for V1.
+filelog/system:
+  include:
+    - /var/log/system.log
+    - /var/log/install.log
+  start_at: end
+  # Default parser. Two regex alternatives cover both formats macOS
+  # writes:
+  #   system.log  : BSD syslog            "May  1 13:59:13 andy proc[123]: msg"
+  #   install.log : ISO+offset (no colon) "2026-05-01 13:42:38-04 andy proc[123]: msg"
+  # Lines that don't match (rare continuation lines) are passed through
+  # unparsed because of on_error: send.
+  #
+  # We strip the parsed timestamp + hostname after extraction: filelog's
+  # observed time and the resource attribute host.name (set by
+  # resourcedetection) are the authoritative values, and keeping the
+  # syslog copies of either just adds Honeycomb columns nobody breaks
+  # down by.
+  operators:
+    - type: regex_parser
+      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[+-]\d{2})\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
+      on_error: send
+    - type: remove
+      field: attributes.bsd_ts
+      if: 'attributes.bsd_ts != nil'
+    - type: remove
+      field: attributes.log_host
+      if: 'attributes.log_host != nil'

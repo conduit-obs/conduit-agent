@@ -1,0 +1,36 @@
+# Linux default host-metrics profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the metrics pipeline alongside otlp. Conservative defaults (60s collection,
+# no per-process metrics) so that a fresh install does not balloon
+# cardinality. Customers who want richer metrics override this with their
+# own conduit.yaml later.
+#
+# Each scraper's *.utilization metric is disabled upstream by default but
+# enabled here. They're computed alongside the byte-level metrics (no extra
+# scrape cost) and give dashboards the percent form ("67% used") that
+# normalizes across hosts of different sizes — without them you only get
+# the raw "110290665472 bytes" value.
+hostmetrics:
+  collection_interval: 60s
+  scrapers:
+    cpu:
+      metrics:
+        system.cpu.utilization:
+          enabled: true
+    memory:
+      metrics:
+        system.memory.utilization:
+          enabled: true
+    load:
+    disk:
+    filesystem:
+      metrics:
+        system.filesystem.utilization:
+          enabled: true
+    network:
+    paging:
+      metrics:
+        system.paging.utilization:
+          enabled: true
+    processes:

@@ -1,0 +1,142 @@
+{{- /*
+Honeycomb output requires exactly one source of HONEYCOMB_API_KEY: either
+honeycomb.apiKey (chart-managed Secret) or honeycomb.existingSecret
+(operator-managed Secret). Catch the unset case at install time rather
+than letting pods CrashLoopBackOff with "secret not found".
+*/ -}}
+{{- if eq (include "conduit-agent.outputMode" .) "honeycomb" -}}
+{{- if and (not .Values.honeycomb.apiKey) (not .Values.honeycomb.existingSecret) -}}
+{{- fail "honeycomb.apiKey or honeycomb.existingSecret must be set when output mode is honeycomb (default). Set one via --set, or switch to a gateway egress with --set gateway.enabled=true --set gateway.endpoint=..." -}}
+{{- end -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "conduit-agent.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    {{- toYaml .Values.daemonset.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "conduit-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.daemonset.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Roll the DaemonSet whenever the rendered conduit.yaml changes.
+        # Without this, ConfigMap edits would only take effect on pod
+        # restarts triggered by something else.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and (eq (include "conduit-agent.outputMode" .) "honeycomb") (not .Values.honeycomb.existingSecret) (.Values.honeycomb.apiKey) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.daemonset.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "conduit-agent.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: {{ .Values.daemonset.hostNetwork }}
+      dnsPolicy: {{ .Values.daemonset.dnsPolicy }}
+      {{- with .Values.daemonset.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.daemonset.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.daemonset.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # securityContext is set on the container, not the pod, so the
+      # distroless nonroot UID baked into the image (per
+      # deploy/docker/Dockerfile) takes effect without forcing the kubelet
+      # to spawn a runtime-extra init.
+      containers:
+        - name: conduit
+          image: {{ include "conduit-agent.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --config
+            - /etc/conduit/conduit.yaml
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+          env:
+            {{- if eq (include "conduit-agent.outputMode" .) "honeycomb" }}
+            - name: HONEYCOMB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conduit-agent.honeycombSecretName" . }}
+                  key: {{ .Values.honeycomb.existingSecretKey }}
+            {{- end }}
+            # K8s_NODE_NAME / POD_NAME / POD_NAMESPACE are wired here so
+            # M5.B's k8sattributes processor (and any future resourceprocessor
+            # rule) can pick them up via ${env:...} without re-templating
+            # the conduit.yaml.
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: K8S_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.daemonset.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/conduit
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "conduit-agent.fullname" . }}
+            items:
+              - key: conduit.yaml
+                path: conduit.yaml

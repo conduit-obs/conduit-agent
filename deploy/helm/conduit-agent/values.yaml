@@ -1,0 +1,158 @@
+# Default values for conduit-agent (M5.A skeleton).
+#
+# This file documents every knob the chart exposes. Values are
+# intentionally narrow in M5.A — kubelet metrics, container log filelog,
+# and k8sattributes enrichment land in M5.B once the matching profile
+# fragments and RBAC arrive. For now the chart deploys an OTLP-only
+# DaemonSet that accepts OTLP from peer pods at conduit-agent:4317 / :4318
+# and forwards to Honeycomb (or a customer-operated gateway).
+
+# ---------------------------------------------------------------------------
+# Honeycomb output. Required for the default values; switch to `gateway`
+# below if you operate your own OTLP gateway.
+# ---------------------------------------------------------------------------
+honeycomb:
+  # Set ONE of apiKey or existingSecret. If both are set, existingSecret wins.
+  #
+  # apiKey is a plain string baked into the rendered Secret. Convenient for
+  # `helm install --set honeycomb.apiKey=$KEY` smoke tests, but operators
+  # should ship the real key via existingSecret in any environment they care
+  # about — Helm values are visible to anyone with read access to the
+  # release secret.
+  apiKey: ""
+
+  # existingSecret names a pre-created Kubernetes Secret with the API key
+  # under existingSecretKey. The DaemonSet mounts that key as the
+  # HONEYCOMB_API_KEY env var which conduit.yaml expands via ${env:...}.
+  #   kubectl create secret generic conduit-honeycomb \
+  #     --from-literal=HONEYCOMB_API_KEY=hcaik_...
+  existingSecret: ""
+  existingSecretKey: HONEYCOMB_API_KEY
+
+  # Honeycomb ingest endpoint. Override for EU tenants
+  # (https://api.eu1.honeycomb.io) or sandboxes.
+  endpoint: https://api.honeycomb.io
+
+# Switch the egress to a customer-operated OTLP gateway instead of
+# Honeycomb-direct. When enabled, honeycomb.apiKey / existingSecret are
+# ignored. The gateway path mirrors output.mode=gateway in conduit.yaml
+# (TLS-required by default per ADR-0009; insecure: true documented as a
+# warning-level opt-out for lab use).
+gateway:
+  enabled: false
+  endpoint: ""
+  # headers map onto output.gateway.headers in conduit.yaml. Use this for
+  # gateway-specific auth (e.g. an API key the gateway expects).
+  headers: {}
+
+# ---------------------------------------------------------------------------
+# Conduit agent identity. These map onto the corresponding fields in
+# conduit.yaml (validated by internal/config/types.go).
+# ---------------------------------------------------------------------------
+conduit:
+  # Required. service.name resource attribute on every emitted signal.
+  # Typical k8s value: a label or workload-style identifier like
+  # "edge-cluster-prod" or "platform-shared".
+  serviceName: ""
+
+  # Required. deployment.environment resource attribute. e.g. "production",
+  # "staging", "us-east-1".
+  deploymentEnvironment: production
+
+  # profile.mode in conduit.yaml. M5.A only ships profile.mode=k8s as the
+  # OTLP-bind=0.0.0.0 knob; the kubelet / filelog / k8sattributes fragment
+  # set lands in M5.B.
+  #
+  # Valid values: auto | linux | darwin | docker | k8s | none.
+  profileMode: k8s
+
+# ---------------------------------------------------------------------------
+# Image. Multi-arch manifest tags published by goreleaser per ADR-0019.
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/conduit-obs/conduit-agent
+  # Override per release. Falls back to .Chart.AppVersion when empty so
+  # `helm install` without --set image.tag tracks the chart version's
+  # pinned agent build.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# ---------------------------------------------------------------------------
+# DaemonSet shape.
+# ---------------------------------------------------------------------------
+daemonset:
+  # Resources sized for the OTLP-only V0 pipeline. Bump in M5.B when
+  # kubeletstats + filelog scrapers add load. Numbers are conservative
+  # starting points; tune from your cluster's `kubectl top pod` once the
+  # agent is running.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+  # Schedule on every Linux/amd64 / Linux/arm64 node by default. Override
+  # nodeSelector to scope to a subset; tolerations are wide-open so the
+  # agent runs on tainted system nodes (control plane, GPU pools) too —
+  # comment them out if your security posture forbids that.
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  tolerations:
+    - operator: Exists
+
+  # Optional pod-level affinity / anti-affinity rules. Empty by default.
+  affinity: {}
+
+  # Annotations applied to every conduit pod. Useful for slotting the
+  # agent into your existing scrape configs (e.g. `prometheus.io/scrape`).
+  podAnnotations: {}
+
+  # Labels applied to every conduit pod, in addition to the chart-managed
+  # labels in templates/_helpers.tpl.
+  podLabels: {}
+
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+  # Set hostNetwork=true if you want the OTLP receiver reachable on the
+  # node's IP directly (rather than only via the cluster network). Off by
+  # default — peer pods use the conduit-agent service / pod IPs and get
+  # there via the cluster network.
+  hostNetwork: false
+  dnsPolicy: ClusterFirstWithHostNet
+
+# ---------------------------------------------------------------------------
+# RBAC. M5.A's chart does not need cluster-scoped permissions because the
+# default profile (mode=k8s) ships no kubelet / k8sattributes receivers
+# yet. M5.C adds the ClusterRole + ClusterRoleBinding once those receivers
+# arrive in M5.B.
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  # Override the auto-generated name when you need to bind external RBAC
+  # to a known SA. Leave blank to use the default
+  # `<release>-conduit-agent` naming.
+  name: ""
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Service for OTLP ingress. Peer pods send to
+# {{ include "conduit-agent.fullname" . }}:4317 / :4318. ClusterIP keeps
+# the agent reachable inside the cluster without exposing it to the LAN.
+# ---------------------------------------------------------------------------
+service:
+  enabled: true
+  type: ClusterIP
+  ports:
+    grpc: 4317
+    http: 4318
+  # health_check is intentionally omitted from the Service: probes go
+  # directly against the pod IP (the DaemonSet exposes 13133), and not
+  # exposing it cluster-wide cuts attack surface.
+  annotations: {}

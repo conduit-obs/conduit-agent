@@ -1,0 +1,51 @@
+# Conduit on a Linux host via docker compose.
+#
+# This is the default deployment shape for "I have a host running docker
+# and I want to point my containers' OTLP traffic at Honeycomb without
+# threading the API key through every service." Conduit listens on the
+# docker network for peer-container OTLP and on the host's loopback for
+# anything running outside compose.
+#
+# Setup:
+#
+#   1. Copy .env.example to .env (or export these in your shell):
+#
+#        HONEYCOMB_API_KEY=hcaik_...                    # required
+#        CONDUIT_SERVICE_NAME=edge-host                 # required
+#        CONDUIT_DEPLOYMENT_ENVIRONMENT=production      # optional
+#
+#   2. docker compose -f deploy/docker/compose-linux-host.yaml up -d
+#
+#   3. From any peer container on the same compose project, send OTLP to
+#      conduit:4317 (gRPC) or http://conduit:4318/v1/{traces,metrics,logs}.
+#      From the host, use 127.0.0.1:4317 / :4318 — those ports are bound
+#      on the loopback interface only, by design.
+#
+#   4. Probe health with `curl http://127.0.0.1:13133` — 200 means every
+#      configured pipeline is up.
+#
+# What this compose deliberately does NOT do:
+#   - It does not bind-mount /proc and /sys, so conduit does not scrape
+#     the host's CPU / memory / disk metrics. Set profile.mode=linux in a
+#     custom conduit.yaml and add the bind mounts (see
+#     deploy/docker/README.md) if you want host metrics from this agent.
+#   - It does not expose ports to the LAN. To accept OTLP from other
+#     hosts, change `127.0.0.1:` to `0.0.0.0:` in the ports list and
+#     understand the security trade-off.
+services:
+  conduit:
+    image: ghcr.io/conduit-obs/conduit-agent:latest
+    container_name: conduit
+    environment:
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY:?set HONEYCOMB_API_KEY in .env or your shell}
+      CONDUIT_SERVICE_NAME: ${CONDUIT_SERVICE_NAME:-conduit-docker}
+      CONDUIT_DEPLOYMENT_ENVIRONMENT: ${CONDUIT_DEPLOYMENT_ENVIRONMENT:-production}
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
+    restart: unless-stopped
+    # No HEALTHCHECK directive: the conduit image is distroless (no shell,
+    # no curl / wget) so a compose-level healthcheck would need a probe
+    # tool we deliberately don't ship. Use the orchestrator's HTTP probe
+    # against http://conduit:13133 instead.

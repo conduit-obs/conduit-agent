@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+data:
+  # conduit.yaml shape mirrors deploy/docker/conduit.yaml.default. The
+  # daemonset injects HONEYCOMB_API_KEY (when output.mode=honeycomb) via
+  # secretKeyRef so the chart-managed conduit.yaml never has the literal
+  # key embedded.
+  conduit.yaml: |
+    service_name: {{ required "conduit.serviceName is required" .Values.conduit.serviceName | quote }}
+    deployment_environment: {{ .Values.conduit.deploymentEnvironment | default "production" | quote }}
+
+    output:
+    {{- if eq (include "conduit-agent.outputMode" .) "honeycomb" }}
+      mode: honeycomb
+      honeycomb:
+        api_key: ${env:HONEYCOMB_API_KEY}
+        endpoint: {{ .Values.honeycomb.endpoint | default "https://api.honeycomb.io" | quote }}
+    {{- else }}
+      mode: gateway
+      gateway:
+        endpoint: {{ required "gateway.endpoint is required when gateway.enabled=true" .Values.gateway.endpoint | quote }}
+        {{- with .Values.gateway.headers }}
+        headers:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    {{- end }}
+
+    profile:
+      # M5.A only ships profile.mode=k8s as the OTLP-bind=0.0.0.0 knob;
+      # kubelet / filelog / k8sattributes receivers land in M5.B.
+      mode: {{ .Values.conduit.profileMode | quote }}

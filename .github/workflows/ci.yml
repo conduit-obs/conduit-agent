@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: go test
+        run: go test ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: make build
+        run: make build
+      - name: Smoke (binary boots, subcommands surface the right errors)
+        run: |
+          set +e
+          # 'conduit run' with no --config falls back to /etc/conduit/conduit.yaml
+          # which doesn't exist on CI runners; it must fail loud, not silent.
+          ./bin/conduit run; rc=$?
+          if [ $rc -eq 0 ]; then echo "expected non-zero exit when default config is missing"; exit 1; fi
+          # Stub commands still surface NotImplementedError until their milestone.
+          ./bin/conduit doctor; rc=$?
+          if [ $rc -eq 0 ]; then echo "expected non-zero exit from doctor stub"; exit 1; fi
+          ./bin/conduit --help
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

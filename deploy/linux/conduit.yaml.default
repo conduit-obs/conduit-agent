@@ -1,0 +1,33 @@
+# Conduit default configuration for Linux installs.
+#
+# Required environment variables (set in /etc/conduit/conduit.env or via
+# your config-management system; the systemd unit reads that file):
+#
+#   HONEYCOMB_API_KEY                Honeycomb ingest key (x-honeycomb-team).
+#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
+#                                    Typical values: a host role like
+#                                    "edge-gateway" or "checkout-api".
+#   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g. "production",
+#                                    "staging"). Defaults to "production"
+#                                    in the shipped /etc/conduit/conduit.env.
+#
+# The defaulted profile is "auto", which on Linux loads:
+#   - hostmetrics    (cpu, memory, load, disk, filesystem, network, paging,
+#                     processes; see internal/profiles/linux/hostmetrics.yaml)
+#   - filelog/system (/var/log/{syslog,messages,auth.log,secure})
+#   - journald       (full systemd journal, no unit filter)
+#
+# To run OTLP-only (no host metrics, no log tailing) set:
+#   profile:
+#     mode: none
+#
+# Full schema reference:
+#   https://github.com/conduit-obs/conduit-agent (until docs land at M13).
+
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

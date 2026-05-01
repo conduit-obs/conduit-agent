@@ -1,0 +1,293 @@
+# Conduit
+
+> An opinionated, Honeycomb-ready, OpenTelemetry-native agent distribution that closes the enterprise observability "familiarity gap" for Honeycomb adoption.
+
+**Conduit is not the destination. Honeycomb is the destination. Conduit is the bridge.**
+
+Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a small CLI (`conduit`) that gives enterprise platform teams a familiar, batteries-included telemetry-collection experience with safe defaults tuned for Honeycomb. It runs on Linux, Windows, Docker, and Kubernetes; emits standard OTLP; and never locks customers in at the collection layer.
+
+## Status
+
+**Pre-alpha. Milestones M1, M2, M3, M4, and M5 (partial) done.**
+
+| Step | Scope | Status |
+|---|---|---|
+| **M1** | Project skeleton, license, governance, ADRs, CLI scaffold, build/CI | done |
+| **M2.A** | OCB manifest ([`builder-config.yaml`](builder-config.yaml)) + `make build-ocb` | done |
+| **M2.B** | conduit.yaml schema (`internal/config/`), upstream-YAML expander (`internal/expander/`), `conduit config --validate`, `conduit preview` | done |
+| **M2.C** | OCB output folded into `internal/collector/`, `conduit run` boots the embedded collector | done |
+| **M3.A** | Platform default profiles: Linux + macOS host metrics, Linux journald + filelog, macOS filelog; auto-detection via `runtime.GOOS` | done |
+| **M3.B** | Linux packaging: deb/rpm/apk/archlinux via nfpms, systemd unit, default `/etc/conduit/{conduit.yaml,conduit.env}`, idempotent maintainer scripts, `scripts/install_linux.sh` | done |
+| **M4.A** | `health_check` extension always on at `0.0.0.0:13133` | done |
+| **M4.B** | Docker profile (`profile.mode=docker`), self-contained `Dockerfile`, in-image default config, runnable compose example | done |
+| **M4.C** | Multi-arch (amd64 + arm64) image build wired in `.goreleaser.yaml` for `ghcr.io/conduit-obs/conduit-agent` | done (publishing CI workflow lands at M12) |
+| **M5.A** | `profile.mode: k8s` schema knob (binds OTLP to `0.0.0.0`); Helm chart skeleton at [`deploy/helm/conduit-agent/`](deploy/helm/conduit-agent/README.md): DaemonSet, ConfigMap, ServiceAccount, Service, optional Secret | done |
+
+The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
+
+M5 ships in slices, mirroring the Linux / Docker pattern: M5.A (this milestone) is the **chart skeleton + schema knob** — `helm install` works as an OTLP relay, but the kubelet / container-log / `k8sattributes` defaults that make the chart actually Kubernetes-aware land in M5.B, with the matching ClusterRole / DaemonSet host mounts in M5.C, OCI publishing in M5.D, and the default board in M5.E. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
+
+You can run, against any conduit.yaml:
+
+```sh
+./bin/conduit config --validate -c conduit.yaml   # exits 0 + "valid", or non-zero with structured field issues
+./bin/conduit preview            -c conduit.yaml   # prints the rendered upstream OTel Collector YAML
+./bin/conduit run                -c conduit.yaml   # boots the embedded collector; OTLP on :4317/:4318 plus profile receivers
+```
+
+`./bin/conduit doctor`, `./bin/conduit version`, and `./bin/conduit send-test-data` still exit non-zero with `not implemented; see milestone <Mn>` and land in later milestones. See [`conduit-agent-plan/04-milestone-plan.md`](conduit-agent-plan/04-milestone-plan.md) for the full milestone plan.
+
+## Install on Linux
+
+Once we cut a tagged release, the one-liner installer pulls the right
+deb / rpm / apk for the host:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/conduit-obs/conduit-agent/main/scripts/install_linux.sh \
+  | sudo bash -s -- --api-key="$HONEYCOMB_API_KEY" --service-name=edge-gateway
+```
+
+What gets installed:
+
+- `/usr/bin/conduit` (the agent binary, with the embedded collector).
+- `/etc/conduit/conduit.yaml` (default config, references env vars; 0640 root:conduit).
+- `/etc/conduit/conduit.env` (`HONEYCOMB_API_KEY`, `CONDUIT_SERVICE_NAME`, `CONDUIT_DEPLOYMENT_ENVIRONMENT`; 0640 root:conduit).
+- `/lib/systemd/system/conduit.service` (deb) or `/usr/lib/systemd/system/conduit.service` (rpm/arch).
+- A system `conduit:conduit` user, added to `adm` and `systemd-journal`.
+- `/var/lib/conduit/` (reserved for filestorage queues, M10) and `/var/log/conduit/`.
+
+Defaults follow the same OS-detection rules as the rest of Conduit: no
+`profile:` block in your config means hostmetrics + filelog/system +
+journald on Linux. Logs go to journald (`journalctl -u conduit`).
+
+For the manual-install path and packaging internals, see
+[`deploy/linux/README.md`](deploy/linux/README.md).
+
+## Run on Docker
+
+Build the image from the repo and run it as a sidecar / standalone agent
+that accepts OTLP from peer containers:
+
+```sh
+docker build -t ghcr.io/conduit-obs/conduit-agent:dev -f deploy/docker/Dockerfile .
+docker compose -f deploy/docker/compose-linux-host.yaml up -d
+```
+
+The image is `gcr.io/distroless/static-debian12:nonroot` (UID 65532, no
+shell) with the conduit binary statically linked. The default in-image
+[`conduit.yaml`](deploy/docker/conduit.yaml.default) sets `profile.mode:
+docker`, which makes the expander bind OTLP receivers to `0.0.0.0:4317`
+/ `:4318` so peer containers in the same docker network can reach the
+agent. The compose file publishes those ports to `127.0.0.1` on the host
+only — LAN-wide ingest is an explicit opt-in (change the bind address
+on the `ports:` mappings).
+
+The `health_check` extension is always on at `0.0.0.0:13133`. Probe with
+`curl http://127.0.0.1:13133` (200 = every pipeline is up) for compose,
+or HTTP-GET it from k8s liveness/readiness probes.
+
+For multi-arch publishing, the bind-mount story for monitoring the
+docker host's CPU / memory / disk from a containerized agent, and the
+default-dashboard plan, see [`deploy/docker/README.md`](deploy/docker/README.md).
+
+## Run on Kubernetes
+
+Install the chart from the repo as a DaemonSet that accepts OTLP from
+peer pods at `<release>-conduit-agent:4317` / `:4318`:
+
+```sh
+kubectl create namespace conduit
+kubectl -n conduit create secret generic conduit-honeycomb \
+  --from-literal=HONEYCOMB_API_KEY=hcaik_...
+
+helm install conduit deploy/helm/conduit-agent \
+  --namespace conduit \
+  --set conduit.serviceName=edge-cluster-prod \
+  --set honeycomb.existingSecret=conduit-honeycomb
+```
+
+The chart sets `profile.mode: k8s` by default, which makes the expander
+bind OTLP to `0.0.0.0:4317` / `:4318` so peer pods can reach the agent
+through the cluster Service. Each pod also exposes the `health_check`
+extension at `:13133` for liveness / readiness probes (the chart wires
+both probes against it automatically).
+
+M5.A is the **chart skeleton** — the DaemonSet, ConfigMap, ServiceAccount,
+and Service all install cleanly, but the chart's default profile does
+not yet ship the kubelet metrics, container log filelog, or
+`k8sattributes` enrichment that make it actually Kubernetes-aware.
+Those land in M5.B (chart version 0.1.x); the matching ClusterRole +
+DaemonSet host mounts in M5.C; OCI publishing of the chart in M5.D;
+and `dashboards/k8s-cluster-overview.json` in M5.E.
+
+For values reference, RBAC plan, and gateway egress, see
+[`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).
+
+## Host identity (always on)
+
+Every signal Conduit emits — host metrics, system logs, OTLP from your apps — is auto-tagged with the standard OpenTelemetry host resource attributes via `resourcedetectionprocessor`:
+
+- `host.name`, `host.id`, `host.arch`, `host.ip`, `host.mac`
+- `os.type`, `os.description`
+
+This is wired into every pipeline regardless of profile, because identifying which host emitted a metric is a precondition for any multi-host dashboard.
+
+To override (e.g., to use a Kubernetes node name instead of the pod hostname) set `OTEL_RESOURCE_ATTRIBUTES` in the environment before starting Conduit:
+
+```sh
+export OTEL_RESOURCE_ATTRIBUTES="host.name=$NODE_NAME"
+```
+
+Detector order is `[env, system]` with `override: false`, so user-supplied values win and incoming OTLP signals from upstream apps are left untouched.
+
+## Default log parsing (always on for filelog)
+
+The platform-default `filelog/system` receiver runs a regex parser over every line so Honeycomb gets structured columns instead of an opaque `body` blob:
+
+| Attribute | Source |
+|---|---|
+| `process` | The process name from `proc[pid]:` |
+| `pid` | The PID inside the brackets, when present |
+| `message` | Everything after `proc[pid]:` |
+
+Two timestamp formats are supported out of the box: BSD syslog (`May  1 13:59:13 ...`, used by `/var/log/syslog`, `/var/log/messages`, macOS `system.log`, etc.) and the ISO-with-offset format macOS uses for `install.log` (`2026-05-01 13:42:38-04 ...`). Lines that don't match either are forwarded unparsed.
+
+On top of the parsed `message`, a `transformprocessor` on the logs pipeline computes a `normalized_message` attribute by masking the bits that make every line unique:
+
+- UUIDs → `*`
+- IPv4 addresses → `*.*.*.*`
+- `key=value` pairs → `key=*`
+- Standalone integers ≥ 4 digits (PIDs, IDs, timestamps) → `*`
+
+`body` and `message` are left untouched. Group by `normalized_message` to count "templates" of similar log lines:
+
+```
+"Adding client SUUpdateServiceClient pid=*, uid=*, installAuth=NO rights=(), transactions=*"
+"Removing client SUUpdateServiceClient pid=*, uid=*, installAuth=NO rights=(), transactions=*"
+```
+
+…instead of seeing each line as unique.
+
+The same `transformprocessor` also defaults `severity_text` to `INFO` and `severity_number` to `9` (`SEVERITY_NUMBER_INFO`) when the record arrives without one — guarded by `where severity_number == SEVERITY_NUMBER_UNSPECIFIED` so journald entries (which carry `PRIORITY` -> severity) and OTLP logs from upstream apps pass through with their original severity intact.
+
+## Default profiles
+
+Out of the box (omit `profile:` from your conduit.yaml entirely), Conduit detects the host OS and turns on the matching platform fragment set:
+
+| Fragment | Linux | macOS (darwin) | Windows | Docker | Kubernetes |
+|---|---|---|---|---|---|
+| `hostmetrics` (CPU / memory / load / disk / filesystem / network) | yes | yes | M6 | M9 (needs bind mounts) | M5.B (per-node via DaemonSet) |
+| `hostmetrics` (paging / processes) | yes | no (privilege-sensitive on darwin) | M6 | M9 | M5.B |
+| `filelog/system` — `/var/log/{syslog,messages,auth.log,secure}` | yes | — | — | — | — |
+| `filelog/system` — `/var/log/{system,install}.log` | — | yes | — | — | — |
+| `journald` (systemd unified journal) | yes | — | — | — | — |
+| `kubeletstats` (pod / container CPU + memory) | — | — | — | — | M5.B |
+| `filelog` of `/var/log/containers/*.log` + `k8sattributes` enrichment | — | — | — | — | M5.B |
+
+The hostmetrics scrapers also enable the `*.utilization` metrics that upstream ships disabled by default — `system.cpu.utilization`, `system.memory.utilization`, `system.filesystem.utilization`, and (Linux only) `system.paging.utilization`. These are 0..1 fractions computed alongside the byte-level metrics, so dashboards can plot percent-used directly instead of dividing the raw `system.filesystem.usage` bytes by the total themselves.
+
+Knobs:
+
+```yaml
+profile:
+  mode: auto          # auto | linux | darwin | docker | k8s | none (default: auto)
+  host_metrics: true  # default true unless mode=none / mode=docker / mode=k8s (M5.A)
+  system_logs: true   # default true unless mode=none / mode=docker / mode=k8s (M5.A)
+```
+
+`mode: none` reverts to the M2 OTLP-only behavior. `mode: linux` / `mode: darwin` force a profile regardless of the host OS — useful in containers or when developing a Linux config on a Mac. `mode: docker` and `mode: k8s` are the container-native shapes: no platform fragment receivers in V0/M5.A (kubelet + container-log defaults land in M5.B for `k8s`), but OTLP listens on `0.0.0.0` instead of `127.0.0.1` so peer containers / pods can reach the agent (see "OTLP bind address" below). On a runtime.GOOS without a fragment set (today: anything not linux or darwin), `auto` falls back to `none` and writes a one-line warning to stderr.
+
+The fragment YAML lives under [`internal/profiles/<goos>/`](internal/profiles/) — each file is plain upstream OTel Collector receiver config that the expander splices into the rendered pipeline.
+
+### OTLP bind address
+
+The OTLP receivers listen on `127.0.0.1:4317` / `:4318` for every host-mode profile (`auto`, `linux`, `darwin`, `none`) and on `0.0.0.0:4317` / `:4318` for the container-native profiles (`mode: docker`, `mode: k8s`). The host default is the safe one: a stock `apt-get install conduit-agent` does not turn the host into an OTLP relay for the local network. Apps on the same machine still reach the agent via the loopback interface; LAN-wide / cluster-wide ingest is an explicit opt-in via `profile.mode: docker` (containers) or `profile.mode: k8s` (Helm chart, where peer pods reach the DaemonSet via the cluster network).
+
+This is enforced in the rendered config: `internal/expander/expander.go` derives the bind address from `profile.mode` directly — there's no separate bind-address knob to forget to set.
+
+## Default dashboards
+
+The Honeycomb boards Conduit ships out of the box live as checked-in JSON under [`dashboards/`](dashboards/):
+
+- [`macos-host-overview.json`](dashboards/macos-host-overview.json) — per-host overview for the darwin profile.
+- [`linux-host-overview.json`](dashboards/linux-host-overview.json) — Linux equivalent, with platform-appropriate filters (block-device-only filesystems, loopback excluded from network) and a swap-utilization panel that macOS deliberately omits.
+
+Future platform boards (Docker, Windows, k8s) land alongside their install milestones (M5 / M6) and at M9 for the Docker host overview, which depends on M9's host-metrics-from-container work. Each board is its own opinionated, narrative-driven dashboard tailored to what's distinctive about that platform's telemetry — a k8s board keys off pods and namespaces, a docker board off containers and compose services, a Windows board off Event Log channels — rather than a forced lowest-common-denominator panel skeleton. The cross-platform contract in [`internal/profiles/PROFILE_SPEC.md`](internal/profiles/PROFILE_SPEC.md) holds the *telemetry shape* (column names, severity defaults, resource attributes) constant; §3 of that doc spells out the dashboard quality bar boards are reviewed against.
+
+The CLI subcommand to apply these (`conduit board apply`, M11) reads them, but the file format is intentionally close to Honeycomb's `/1/boards` API so operators can also POST them by hand against `HONEYCOMB_CONFIG_API_KEY` (a *configuration* key — distinct from the ingest key in `conduit.yaml`). See [`dashboards/README.md`](dashboards/README.md) for the schema and auth model.
+
+## What Conduit is
+
+A familiar, batteries-included OTel Collector distribution and CLI that:
+
+1. Lets a platform engineer with no OpenTelemetry expertise turn telemetry on in 30 minutes.
+2. Sends Honeycomb-shaped data with safe defaults (cardinality-aware, redaction-aware, RED-metrics-before-sampling).
+3. Stays open: pure upstream OTel components in V0, no proprietary exporter, no lock-in at the collection layer.
+
+## What Conduit is not
+
+- **Not a replacement for the OTel Collector.** Conduit is a curated distribution of it.
+- **Not a replacement for Honeycomb.** Conduit's success is measured in how quickly customers feel productive in Honeycomb.
+- **Not a control plane.** No fleet management, remote config, or policy server in V0.
+- **Not a gateway tier.** V0 ships only the agent. Customers needing a gateway run the Honeycomb Collector or any OTLP-capable gateway. Conduit emits to one with a single config switch.
+- **Not a fork.** Conduit composes upstream components via the OpenTelemetry Collector Builder (OCB).
+
+## Planning workspace
+
+The full V0 plan — strategy, requirements, architecture, milestones, acceptance criteria, risks, decisions, and demo script — lives under [`conduit-agent-plan/`](conduit-agent-plan/). Start with [`conduit-agent-plan/README.md`](conduit-agent-plan/README.md).
+
+The Architecture Decision Records that lock V0's shape are committed under [`docs/adr/`](docs/adr/) (`adr-0001.md` through `adr-0018.md`). Open decisions still live in [`conduit-agent-plan/13-decision-log.md`](conduit-agent-plan/13-decision-log.md) §"Open decisions" until resolved.
+
+## V0 / V1 / V2 at a glance
+
+| Phase | Theme | Headline | Not in this phase |
+|---|---|---|---|
+| **V0** | Adoption bridge (agent only) | OCB-based distribution; Linux/Windows/Docker/K8s Helm; AWS recipes; declarative `output:` block (`honeycomb` or `gateway`, with optional Refinery for traces); RED metrics before sampling; `conduit doctor` and `conduit preview`; safe-by-default cardinality and redaction | Conduit-as-gateway; agent-side fanout; S3 archival; remote config; fleet inventory; Lambda extension |
+| **V1** | Field hardening | Translation guides, broader k8s receivers, redaction profile library, signed-release maturity | Anything requiring a control plane |
+| **V2+** | Control plane and gateway role | Enrollment, remote config, fleet inventory, rollout rings, drift detection, policy packs, Conduit-as-gateway with routing fanout | — |
+
+## Build
+
+A fresh clone builds with no extra steps — `internal/collector/components.go` (the OCB-generated factory map) is committed:
+
+```sh
+make build            # builds ./bin/conduit including the embedded OTel collector
+make test             # go test ./...
+make lint             # golangci-lint run ./...
+make release-snapshot # local-only goreleaser snapshot; no publish, no signing
+```
+
+When you change [`builder-config.yaml`](builder-config.yaml) (add a component, bump upstream version), regenerate the embedded collector:
+
+```sh
+make install-ocb      # one-time download of the pinned OCB binary into ./bin/ocb
+make build-ocb        # regenerate internal/collector/components.go from builder-config.yaml
+                      #   (under the hood: runs OCB to ./build/collector/, then folds in
+                      #    components.go with the package rewritten to "package collector")
+```
+
+You can also run:
+
+```sh
+./bin/conduit --help                          # lists every subcommand
+./bin/conduit config --validate -c FILE       # validates conduit.yaml against the schema
+./bin/conduit preview -c FILE                 # renders the upstream OTel Collector YAML
+./bin/conduit run -c FILE                     # boots the embedded collector
+```
+
+See [Makefile](Makefile) for the full target list.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The two rules engineers need to know on day one:
+
+1. **No verbatim code copy from the Observe Agent reference.** Patterns may be borrowed conceptually with attribution; verbatim copy is a rejected PR. See [`conduit-agent-plan/12-observe-reference-notes.md`](conduit-agent-plan/12-observe-reference-notes.md).
+2. **No custom OTel processors or receivers in V0.** Pure upstream only (ADR-0004).
+
+## Security
+
+Report vulnerabilities to `security@conduit-obs.com`. See [`SECURITY.md`](SECURITY.md) for the disclosure process.
+
+## License
+
+[Apache-2.0](LICENSE). Copyright 2026 The Conduit Authors.

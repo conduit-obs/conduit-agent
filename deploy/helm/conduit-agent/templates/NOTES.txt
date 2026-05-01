@@ -1,0 +1,57 @@
+Conduit agent {{ .Chart.AppVersion }} installed as DaemonSet
+{{ include "conduit-agent.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+What's running
+--------------
+- One {{ include "conduit-agent.name" . }} pod per node (kubernetes.io/os=linux).
+- OTLP receivers listening on 0.0.0.0:4317 (gRPC) / :4318 (HTTP) inside
+  each pod, exposed cluster-wide via Service
+  {{ include "conduit-agent.fullname" . }}:{{ .Values.service.ports.grpc }} and
+  {{ include "conduit-agent.fullname" . }}:{{ .Values.service.ports.http }}.
+- Health check endpoint on each pod at :13133 (HTTP GET).
+
+{{ if eq (include "conduit-agent.outputMode" .) "honeycomb" -}}
+Output: Honeycomb at {{ .Values.honeycomb.endpoint }}.
+{{- if .Values.honeycomb.existingSecret }}
+API key sourced from Secret/{{ .Values.honeycomb.existingSecret }} key {{ .Values.honeycomb.existingSecretKey }}.
+{{- else if .Values.honeycomb.apiKey }}
+API key sourced from chart values (rendered into Secret/{{ include "conduit-agent.fullname" . }}).
+{{- else }}
+WARNING: no API key configured. Set honeycomb.apiKey or honeycomb.existingSecret.
+{{- end }}
+{{- else }}
+Output: customer-operated OTLP gateway at {{ .Values.gateway.endpoint }}.
+{{- end }}
+
+Profile mode: {{ .Values.conduit.profileMode }}.
+{{- if eq .Values.conduit.profileMode "k8s" }}
+M5.A's k8s profile only flips the OTLP bind to 0.0.0.0 so peer pods can
+reach the agent. The kubelet / container-log / k8sattributes receivers
+land in M5.B (chart version 0.1.x).
+{{- end }}
+
+Send a test trace
+-----------------
+From any pod in the cluster:
+
+  curl -X POST http://{{ include "conduit-agent.fullname" . }}:{{ .Values.service.ports.http }}/v1/traces \
+    -H 'Content-Type: application/json' \
+    -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"smoketest"}}]},"scopeSpans":[{"spans":[{"traceId":"01020304050607080102030405060708","spanId":"0102030405060708","name":"smoke","startTimeUnixNano":1,"endTimeUnixNano":2}]}]}]}'
+
+Check it landed:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "conduit-agent.name" . }} --tail=20
+
+Probe pod liveness:
+
+  kubectl exec -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "conduit-agent.name" . }} -- /usr/bin/conduit --version || true
+  # Health check via kubectl port-forward:
+  kubectl port-forward -n {{ .Release.Namespace }} ds/{{ include "conduit-agent.fullname" . }} 13133:13133 &
+  curl -s http://127.0.0.1:13133
+
+Next steps
+----------
+- conduit-agent-plan/04-milestone-plan.md §M5 walks through the full
+  Kubernetes acceptance criteria.
+- internal/profiles/k8s/README.md (M5.B) will document the kubelet +
+  filelog + k8sattributes defaults once they ship.

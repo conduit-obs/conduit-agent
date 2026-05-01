@@ -1,0 +1,215 @@
+# Goreleaser config for the Conduit agent.
+#
+# What's wired today:
+#   - tar.gz / zip archives of the conduit binary             (M1)
+#   - deb / rpm / archlinux packages via nfpms                (M3.B)
+#   - multi-arch (amd64 + arm64) OCI image at
+#     ghcr.io/conduit-obs/conduit-agent (per ADR-0019)        (M4.C)
+#
+# Still pending:
+#   - M6  : Windows MSI (WiX)
+#   - M12 : Signing (cosign / Authenticode / GPG / Helm provenance) and
+#           image SBOM attestations — gated on OQ-5 in the decision log.
+version: 2
+
+project_name: conduit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: conduit
+    main: ./
+    binary: conduit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      # Wire to cmd/version once that subcommand stops being a stub (M3+).
+      # - -X github.com/conduit-obs/conduit-agent/cmd/version.version={{ .Version }}
+      # - -X github.com/conduit-obs/conduit-agent/cmd/version.commit={{ .Commit }}
+      # - -X github.com/conduit-obs/conduit-agent/cmd/version.buildDate={{ .Date }}
+
+archives:
+  - id: conduit
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+# Linux native packages. Same payload across deb / rpm / apk / archlinux —
+# the package manager, install paths, and maintainer-script semantics are
+# all that vary, and nfpm normalizes those.
+nfpms:
+  - id: conduit
+    package_name: conduit
+    builds:
+      - conduit
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: Conduit Observability
+    homepage: https://github.com/conduit-obs/conduit-agent
+    maintainer: Conduit Maintainers <maintainers@conduit-obs.com>
+    description: |-
+      Conduit is an Apache-2.0-licensed OpenTelemetry distribution for
+      Honeycomb. It ships an embedded OTel Collector with a curated
+      component set, vendor-neutral conduit.yaml configuration, and
+      platform default profiles for host metrics and system logs.
+    license: Apache-2.0
+    section: net
+    # apk lands once preinstall.sh is portable across busybox-only systems
+    # (Alpine uses adduser / addgroup, not useradd / groupadd, and
+    # /sbin/nologin instead of /usr/sbin/nologin). Tracked as a follow-up
+    # to M3.B; deb / rpm / archlinux all share the systemd + useradd path.
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    bindir: /usr/bin
+    contents:
+      - src: deploy/linux/conduit.service
+        dst: /lib/systemd/system/conduit.service
+        file_info:
+          mode: 0644
+        packager: deb
+      - src: deploy/linux/conduit.service
+        dst: /usr/lib/systemd/system/conduit.service
+        file_info:
+          mode: 0644
+        packager: rpm
+      - src: deploy/linux/conduit.service
+        dst: /usr/lib/systemd/system/conduit.service
+        file_info:
+          mode: 0644
+        packager: archlinux
+      # Default config + env file. Marked "config|noreplace" so package
+      # upgrades preserve operator edits — the new defaults land at
+      # /etc/conduit/conduit.{yaml,env}.{rpmnew,dpkg-dist} for review.
+      - src: deploy/linux/conduit.yaml.default
+        dst: /etc/conduit/conduit.yaml
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+          owner: root
+          group: conduit
+      - src: deploy/linux/conduit.env.default
+        dst: /etc/conduit/conduit.env
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+          owner: root
+          group: conduit
+      - src: LICENSE
+        dst: /usr/share/doc/conduit/LICENSE
+        file_info:
+          mode: 0644
+      - src: README.md
+        dst: /usr/share/doc/conduit/README.md
+        file_info:
+          mode: 0644
+    scripts:
+      preinstall:  deploy/linux/scripts/preinstall.sh
+      postinstall: deploy/linux/scripts/postinstall.sh
+      preremove:   deploy/linux/scripts/preremove.sh
+      postremove:  deploy/linux/scripts/postremove.sh
+# Multi-arch container image (M4.C). One `dockers:` entry per arch builds
+# a per-arch image (ghcr.io/...:vX.Y.Z-amd64 / -arm64); `docker_manifests:`
+# below stitches them into the manifest list that publishes as the
+# canonical tag. Image base, USER, EXPOSE, ENTRYPOINT, default config
+# placement live in deploy/docker/Dockerfile.goreleaser — kept narrow so
+# it doesn't drift from the source-build deploy/docker/Dockerfile.
+#
+# Authentication: CI logs into ghcr.io with the `docker/login-action` flow
+# using GITHUB_TOKEN; goreleaser's `release` step then uses the existing
+# docker daemon credentials. Local `goreleaser release --snapshot` skips
+# the push by virtue of `--snapshot`.
+#
+# Image signing (cosign) and SBOM attestations are deliberately deferred
+# to M12; both depend on OQ-5 (signing infrastructure ownership).
+dockers:
+  - id: conduit-amd64
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: deploy/docker/Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Version }}-amd64"
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/conduit-obs/conduit-agent:latest-amd64"
+    extra_files:
+      - deploy/docker/conduit.yaml.default
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.description=Conduit OTel distribution for Honeycomb"
+      - "--label=org.opencontainers.image.url=https://github.com/conduit-obs/conduit-agent"
+      - "--label=org.opencontainers.image.source=https://github.com/conduit-obs/conduit-agent"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: conduit-arm64
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: deploy/docker/Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Version }}-arm64"
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Major }}.{{ .Minor }}-arm64"
+      - "ghcr.io/conduit-obs/conduit-agent:latest-arm64"
+    extra_files:
+      - deploy/docker/conduit.yaml.default
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.description=Conduit OTel distribution for Honeycomb"
+      - "--label=org.opencontainers.image.url=https://github.com/conduit-obs/conduit-agent"
+      - "--label=org.opencontainers.image.source=https://github.com/conduit-obs/conduit-agent"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+docker_manifests:
+  - name_template: "ghcr.io/conduit-obs/conduit-agent:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Version }}-amd64"
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/conduit-obs/conduit-agent:{{ .Major }}.{{ .Minor }}"
+    image_templates:
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/conduit-obs/conduit-agent:{{ .Major }}.{{ .Minor }}-arm64"
+  - name_template: "ghcr.io/conduit-obs/conduit-agent:latest"
+    image_templates:
+      - "ghcr.io/conduit-obs/conduit-agent:latest-amd64"
+      - "ghcr.io/conduit-obs/conduit-agent:latest-arm64"
+
+# Ship install_linux.sh and the systemd unit alongside the release archives
+# so curl-pipe-bash installs and config-management modules can grab them
+# directly from the GitHub release without unpacking a deb/rpm.
+release:
+  draft: true
+  prerelease: auto
+  extra_files:
+    - glob: scripts/install_linux.sh
+    - glob: deploy/linux/conduit.service
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ .Tag }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  disable: true

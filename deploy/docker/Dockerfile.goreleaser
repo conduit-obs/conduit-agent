@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7
+#
+# Conduit V0 Docker image — release-pipeline variant.
+#
+# This Dockerfile is fed by goreleaser's `dockers:` blocks in
+# .goreleaser.yaml. Goreleaser builds the conduit binary for each
+# target arch (linux/amd64 + linux/arm64), prepares a per-arch build
+# context that contains the matching binary at ./conduit and the
+# extra_files declared in the dockers block, and then `docker buildx
+# build`s using this Dockerfile. Each per-arch image is published to
+# ghcr.io/conduit-obs/conduit-agent:<tag>-<arch>; the matching
+# docker_manifests block then stitches them into the multi-arch
+# manifest at ghcr.io/conduit-obs/conduit-agent:<tag>.
+#
+# Why two Dockerfiles instead of one?
+#   - deploy/docker/Dockerfile is self-contained (Go builder + runtime)
+#     so a fresh `git clone && docker build .` produces a usable image
+#     without goreleaser. That's the dev / contributor path.
+#   - deploy/docker/Dockerfile.goreleaser (this file) skips the Go
+#     toolchain because goreleaser already produced a static binary;
+#     reusing that binary keeps the per-arch image build fast in CI
+#     and avoids accidentally redoing the build with different flags.
+# The two Dockerfiles are kept narrow and structurally aligned so they
+# don't drift — anything material to the runtime image (base, user,
+# ports, default config, entrypoint) lives in both.
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Default in-image conduit.yaml — sets profile.mode=docker so the
+# expander emits OTLP receivers bound to 0.0.0.0 (peer containers can
+# reach them). Override at run time by mounting your own at
+# /etc/conduit/conduit.yaml.
+COPY --chown=65532:65532 deploy/docker/conduit.yaml.default /etc/conduit/conduit.yaml
+
+# Goreleaser places the matching-arch binary at the root of the build
+# context as ./conduit (the `binary:` value from the builds block).
+COPY --chown=65532:65532 conduit /usr/bin/conduit
+
+# 4317: OTLP/gRPC, 4318: OTLP/HTTP, 13133: health_check (always on; see
+# internal/expander/templates/base.yaml.tmpl).
+EXPOSE 4317 4318 13133
+
+USER nonroot:nonroot
+
+# Liveness / readiness probing in compose / k8s should HTTP-GET :13133;
+# distroless has no shell, no curl, no wget, so we deliberately do not
+# embed a Dockerfile HEALTHCHECK directive (see deploy/docker/README.md).
+
+ENTRYPOINT ["/usr/bin/conduit"]
+CMD ["run", "--config", "/etc/conduit/conduit.yaml"]

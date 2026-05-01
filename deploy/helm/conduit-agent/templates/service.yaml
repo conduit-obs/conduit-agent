@@ -1,0 +1,33 @@
+{{- if .Values.service.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  # ClusterIP keeps OTLP reachable only inside the cluster — peer pods
+  # send to <release>-conduit-agent:4317 / :4318. The internalTrafficPolicy
+  # is intentionally not set to Local: even though the agent runs as a
+  # DaemonSet, we want pods on nodes whose conduit-agent pod is briefly
+  # unhealthy to fail over to a sibling node rather than dropping data.
+  selector:
+    {{- include "conduit-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp-grpc
+      port: {{ .Values.service.ports.grpc }}
+      targetPort: otlp-grpc
+      protocol: TCP
+      appProtocol: grpc
+    - name: otlp-http
+      port: {{ .Values.service.ports.http }}
+      targetPort: otlp-http
+      protocol: TCP
+      appProtocol: http
+{{- end -}}

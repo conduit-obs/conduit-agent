@@ -1,0 +1,34 @@
+# Default in-image Conduit configuration for the
+# ghcr.io/conduit-obs/conduit-agent Docker image (registry venue locked in
+# docs/adr/adr-0019.md). Override at run time by mounting your own
+# conduit.yaml at /etc/conduit/conduit.yaml inside the container.
+#
+# Required environment variables:
+#
+#   HONEYCOMB_API_KEY                Honeycomb ingest key (header
+#                                    x-honeycomb-team).
+#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
+#                                    Typical values: a service or component
+#                                    name like "checkout-api".
+#   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g.
+#                                    "production", "staging"). Defaults to
+#                                    "production" when unset.
+#
+# profile.mode=docker tells the expander to bind OTLP receivers to 0.0.0.0
+# (peer containers in the same compose / pod / network can reach them).
+# It also keeps the platform host-metrics fragments off — scraping /proc
+# and /sys from inside a container needs bind mounts the operator must
+# opt into; advanced users who want host metrics from a containerized
+# agent can switch profile.mode to "linux" and add the bind mounts at run
+# time (documented in deploy/docker/README.md).
+
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}
+
+profile:
+  mode: docker

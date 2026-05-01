@@ -1,0 +1,48 @@
+[Unit]
+Description=Conduit OpenTelemetry agent for Honeycomb
+Documentation=https://github.com/conduit-obs/conduit-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conduit
+Group=conduit
+
+# Secrets and per-host overrides live in /etc/conduit/conduit.env. The
+# default file is empty; the install script (or your config-management
+# system) is expected to populate at minimum HONEYCOMB_API_KEY,
+# CONDUIT_SERVICE_NAME, and CONDUIT_DEPLOYMENT_ENVIRONMENT before the
+# service is enabled.
+EnvironmentFile=/etc/conduit/conduit.env
+
+ExecStart=/usr/bin/conduit run --config=/etc/conduit/conduit.yaml
+
+# Conduit logs to stdout/stderr; systemd captures both into journald,
+# which is exactly what the systemd-default StandardOutput / StandardError
+# do. Spelled out here so the behavior is obvious.
+StandardOutput=journal
+StandardError=journal
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+
+# Lightweight hardening — we deliberately stop short of ProtectSystem=strict
+# so filelog can still tail /var/log/* and journaldreceiver can still talk
+# to /run/systemd/journal/. Tighter sandboxing lands when we revisit the
+# threat model in V1.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+
+# Allow conduit to write its own state (filestorage extension queues land
+# in M10) and capture-side scratch.
+ReadWritePaths=/var/lib/conduit /var/log/conduit
+
+[Install]
+WantedBy=multi-user.target

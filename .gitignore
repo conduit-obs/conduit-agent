@@ -1,0 +1,44 @@
+# Build artifacts
+/bin/
+/dist/
+/build/
+*.exe
+*.test
+*.out
+
+# Go test / profiling output
+*.prof
+*.coverprofile
+coverage.out
+coverage.html
+coverage.txt
+
+# Go module cache (in case anyone vendors locally)
+vendor/
+
+# IDE / editor scratch
+.idea/
+.vscode/
+.cursor/
+.zed/
+*.swp
+*.swo
+*.bak
+*.orig
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+.env.local
+
+# Local-only test configs (kept out of OSS repo to avoid accidental key leaks)
+prod-conduit.yaml
+
+# Internal planning materials — kept on the contributor's local checkout but
+# not published to the OSS repo. Public-facing planning lives in GitHub
+# Issues / a project board.
+/conduit-agent-plan/
