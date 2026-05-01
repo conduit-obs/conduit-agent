@@ -27,8 +27,6 @@ The command:
 The collector listens for OTLP on :4317 (gRPC) and :4318 (HTTP) and exports
 to Honeycomb or a customer gateway depending on output.mode.
 
-See conduit-agent-plan/03-technical-architecture-v0.md for the V0 design.
-
 Note: --log-level is parsed but not yet wired through to the embedded
 collector; that lands in M3 along with the structured logging story.`
 

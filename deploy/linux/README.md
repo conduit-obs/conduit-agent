@@ -74,8 +74,3 @@ sudo pacman -U ./conduit_X.Y.Z_linux_amd64.pkg.tar.zst
   `CONDUIT_SERVICE_NAME` to start.
 - The systemd unit logs to journald via the default `StandardOutput=journal`.
 - `/etc/conduit/conduit.yaml` and `conduit.env` are 0640 root:conduit.
-
-References:
-
-- [`conduit-agent-plan/04-milestone-plan.md`](../../conduit-agent-plan/04-milestone-plan.md) §M3.
-- [`conduit-agent-plan/06-work-breakdown-structure.md`](../../conduit-agent-plan/06-work-breakdown-structure.md) EP-4.

@@ -13,7 +13,7 @@ Each ADR has one of these statuses:
 
 ## V0 baseline (`adr-0001` … `adr-0018`)
 
-The 18 V0 baseline ADRs are committed alongside the M1 skeleton. They were drafted during V0 planning and live as a single document at [`conduit-agent-plan/13-decision-log.md`](../../conduit-agent-plan/13-decision-log.md) §"Decisions made". Each ADR file in this directory is the standalone form of one entry from that log.
+The 18 V0 baseline ADRs are committed alongside the M1 skeleton. They lock in the foundational decisions Conduit's V0 architecture rests on.
 
 | ADR | Title |
 |---|---|
@@ -38,19 +38,12 @@ The 18 V0 baseline ADRs are committed alongside the M1 skeleton. They were draft
 
 ## Resolved during build (`adr-0019` …)
 
-ADRs in this section were drafted as open decisions in
-[`conduit-agent-plan/13-decision-log.md`](../../conduit-agent-plan/13-decision-log.md)
-§"Open decisions" and resolved during V0 build. They are immutable once
-Accepted; the matching open-decision entries link forward to the ADR.
+ADRs in this section were resolved during V0 build, often after a tracked
+open question matured into a decision. Once Accepted, ADRs are immutable.
 
 | ADR | Title |
 |---|---|
 | [0019](adr-0019.md) | Container image published to ghcr.io/conduit-obs/conduit-agent |
-
-Remaining open V0 decisions (OQ-1 through OQ-10, minus those already
-folded into ADRs above) live in
-[`conduit-agent-plan/13-decision-log.md`](../../conduit-agent-plan/13-decision-log.md)
-§"Open decisions" until resolved.
 
 ## Adding a new ADR
 

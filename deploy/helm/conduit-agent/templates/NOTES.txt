@@ -51,7 +51,5 @@ Probe pod liveness:
 
 Next steps
 ----------
-- conduit-agent-plan/04-milestone-plan.md §M5 walks through the full
-  Kubernetes acceptance criteria.
 - internal/profiles/k8s/README.md (M5.B) will document the kubelet +
   filelog + k8sattributes defaults once they ship.

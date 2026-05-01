@@ -190,5 +190,5 @@ Reviewers reject profile PRs that miss any of these:
 - The macOS reference dashboard: [`dashboards/macos-host-overview.json`](../../dashboards/macos-host-overview.json).
 - The base template that wires the always-on processors:
   [`internal/expander/templates/base.yaml.tmpl`](../expander/templates/base.yaml.tmpl).
-- M9 in [`04-milestone-plan.md`](../../conduit-agent-plan/04-milestone-plan.md)
+- M9 in `04-milestone-plan.md`
   for the cross-platform rollout.

@@ -20,7 +20,7 @@ For CVEs in the upstream OpenTelemetry Collector that are pinned by Conduit, we 
 
 ## Supported versions
 
-While Conduit is in pre-alpha (`v0.0.x`, M1 skeleton), there is no commitment to backports. From `v0.1.0` onwards (M12 release hardening), security patches will be backported to the most recent MINOR per [`conduit-agent-plan/08-release-and-support-model.md`](conduit-agent-plan/08-release-and-support-model.md).
+While Conduit is in pre-alpha (`v0.0.x`, M1 skeleton), there is no commitment to backports. From `v0.1.0` onwards (M12 release hardening), security patches will be backported to the most recent MINOR per the release-and-support model documented at launch.
 
 ## Scope
 

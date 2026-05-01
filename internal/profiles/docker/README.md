@@ -66,7 +66,7 @@ deliverable, designed to be a docker-native opinionated board (keyed off
 `container.name` / `container.image.name`, narrative organized around
 container-fleet questions an operator actually has) — not a copy of the
 host-overview skeleton. The deferral is recorded in the
-[milestone plan](../../../conduit-agent-plan/04-milestone-plan.md) §M4
+milestone plan §M4
 (scope) and §M9 (deliverables).
 
 ## See also

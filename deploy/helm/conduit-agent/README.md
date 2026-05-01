@@ -8,9 +8,7 @@ DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
 > container log filelog, and `k8sattributes` enrichment defaults land in
 > M5.B; the matching ClusterRole / ClusterRoleBinding lands in M5.C; chart
 > publishing to `oci://ghcr.io/conduit-obs/charts/conduit-agent` lands in
-> M5.D. Track the slice plan in
-> [`conduit-agent-plan/04-milestone-plan.md`](../../../conduit-agent-plan/04-milestone-plan.md)
-> §M5.
+> M5.D.
 
 ## What you get
 
@@ -132,7 +130,6 @@ helm template conduit deploy/helm/conduit-agent \
 
 ## Related docs
 
-- [`conduit-agent-plan/04-milestone-plan.md`](../../../conduit-agent-plan/04-milestone-plan.md) §M5 — the slice plan and acceptance criteria.
 - [`docs/adr/adr-0019.md`](../../../docs/adr/adr-0019.md) — registry venue (`ghcr.io/conduit-obs/...`).
 - [`internal/profiles/PROFILE_SPEC.md`](../../../internal/profiles/PROFILE_SPEC.md) — the platform profile contract M5.B+ delivers against.
 - [`deploy/docker/README.md`](../../docker/README.md) — sibling Docker deployment path.

@@ -35,7 +35,7 @@ You can run, against any conduit.yaml:
 ./bin/conduit run                -c conduit.yaml   # boots the embedded collector; OTLP on :4317/:4318 plus profile receivers
 ```
 
-`./bin/conduit doctor`, `./bin/conduit version`, and `./bin/conduit send-test-data` still exit non-zero with `not implemented; see milestone <Mn>` and land in later milestones. See [`conduit-agent-plan/04-milestone-plan.md`](conduit-agent-plan/04-milestone-plan.md) for the full milestone plan.
+`./bin/conduit doctor`, `./bin/conduit version`, and `./bin/conduit send-test-data` still exit non-zero with `not implemented; see milestone <Mn>` and land in later milestones.
 
 ## Install on Linux
 
@@ -232,11 +232,9 @@ A familiar, batteries-included OTel Collector distribution and CLI that:
 - **Not a gateway tier.** V0 ships only the agent. Customers needing a gateway run the Honeycomb Collector or any OTLP-capable gateway. Conduit emits to one with a single config switch.
 - **Not a fork.** Conduit composes upstream components via the OpenTelemetry Collector Builder (OCB).
 
-## Planning workspace
+## Architecture Decision Records
 
-The full V0 plan — strategy, requirements, architecture, milestones, acceptance criteria, risks, decisions, and demo script — lives under [`conduit-agent-plan/`](conduit-agent-plan/). Start with [`conduit-agent-plan/README.md`](conduit-agent-plan/README.md).
-
-The Architecture Decision Records that lock V0's shape are committed under [`docs/adr/`](docs/adr/) (`adr-0001.md` through `adr-0018.md`). Open decisions still live in [`conduit-agent-plan/13-decision-log.md`](conduit-agent-plan/13-decision-log.md) §"Open decisions" until resolved.
+The decisions that lock V0's shape are committed under [`docs/adr/`](docs/adr/) (`adr-0001.md` through `adr-0019.md`). Each ADR captures one decision, its alternatives, and its consequences. Read them in order to understand the build doctrine — Apache-2.0 + clean-room (ADR-0013), pure upstream OTel components (ADR-0004), `output.mode` rather than per-signal endpoints (ADR-0008), allowlist-based RED dimensions (ADR-0006), and so on. New decisions get a new ADR.
 
 ## V0 / V1 / V2 at a glance
 
@@ -281,7 +279,7 @@ See [Makefile](Makefile) for the full target list.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). The two rules engineers need to know on day one:
 
-1. **No verbatim code copy from the Observe Agent reference.** Patterns may be borrowed conceptually with attribution; verbatim copy is a rejected PR. See [`conduit-agent-plan/12-observe-reference-notes.md`](conduit-agent-plan/12-observe-reference-notes.md).
+1. **No verbatim code copy from the Observe Agent reference.** Patterns may be borrowed conceptually with attribution; verbatim copy is a rejected PR.
 2. **No custom OTel processors or receivers in V0.** Pure upstream only (ADR-0004).
 
 ## Security

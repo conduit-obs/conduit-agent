@@ -10,7 +10,7 @@
 # release — keeping the source-build path and the release-build path on
 # the same Dockerfile so they don't drift.
 #
-# Required acceptance criteria from M4 (see conduit-agent-plan/04-milestone-plan.md):
+# Acceptance constraints baked into this image:
 #   - Image runs as non-root by default (USER nonroot below).
 #   - Health check endpoint reachable (health_check extension is wired
 #     into every Conduit pipeline; bind to 0.0.0.0:13133 — see

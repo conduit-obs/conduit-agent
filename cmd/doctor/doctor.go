@@ -17,9 +17,7 @@ reachability, auth header format, OTLP receiver port availability, filelog
 permissions, k8s RBAC, queue health, memory pressure, and Conduit-vs-upstream
 collector compatibility.
 
-In M1 this is a stub. Real behavior lands in M11.
-
-See conduit-agent-plan/01-product-requirements.md FR-8 for the full check list.`
+In M1 this is a stub. Real behavior lands in M11.`
 
 // NewCommand returns the M1 stub for `conduit doctor`.
 func NewCommand() *cobra.Command {

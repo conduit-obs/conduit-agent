@@ -22,9 +22,7 @@ Implemented today (M2.B):
 Pending (M11):
   --probe                    probe Honeycomb / gateway endpoints
   --dimensions               print RED dimensions and cardinality projections
-  --no-color                 disable color in human output
-
-See conduit-agent-plan/01-product-requirements.md FR-8 §"conduit preview".`
+  --no-color                 disable color in human output`
 
 // NewCommand returns the conduit preview command.
 func NewCommand() *cobra.Command {

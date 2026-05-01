@@ -8,7 +8,7 @@ These are non-negotiable. PRs that violate them are closed without further discu
 
 ### 1. No verbatim code copy from the Observe Agent reference
 
-Conduit's planning explicitly used Observe's open-source agent (`github.com/observeinc/observe-agent`) as conceptual reference material. Both projects are Apache-2.0 licensed, so verbatim copying is *legal* — but Conduit is a clean-room implementation as a matter of project discipline. See [`conduit-agent-plan/12-observe-reference-notes.md`](conduit-agent-plan/12-observe-reference-notes.md) for the rationale.
+Conduit's planning explicitly used Observe's open-source agent (`github.com/observeinc/observe-agent`) as conceptual reference material. Both projects are Apache-2.0 licensed, so verbatim copying is *legal* — but Conduit is a clean-room implementation as a matter of project discipline ([ADR-0013](docs/adr/adr-0013.md)).
 
 When a PR is influenced by something you read in the Observe codebase, you must declare in the PR description which of the following applies:
 
@@ -52,7 +52,7 @@ Required tooling:
 ## How to propose changes
 
 1. Open an issue describing the change before opening a PR for anything more than a typo. We close large surprise PRs.
-2. Reference the relevant milestone and acceptance criterion from [`conduit-agent-plan/04-milestone-plan.md`](conduit-agent-plan/04-milestone-plan.md) and [`conduit-agent-plan/05-acceptance-criteria.md`](conduit-agent-plan/05-acceptance-criteria.md) in the PR description.
+2. Reference the relevant milestone (`M1` … `M13`, see the status table in [`README.md`](README.md)) in the PR description.
 3. Keep PRs focused. One concept per PR.
 4. Add tests for new behavior. Update goldens for config-render changes (post-M2).
 5. Update docs in the same PR. Schema-drift bugs are a chronic OSS-project failure mode and we have a CI gate to prevent them.

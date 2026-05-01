@@ -1,7 +1,7 @@
-// Package cmd assembles the conduit Cobra CLI. Subcommand wiring follows the
-// milestone plan (see conduit-agent-plan/04-milestone-plan.md): some
-// subcommands are fully wired (run, preview, config), others are still M1
-// stubs that exit non-zero (doctor, version, send-test-data).
+// Package cmd assembles the conduit Cobra CLI. Some subcommands are fully
+// wired (run, preview, config); others are still M1 stubs that exit
+// non-zero with "not implemented" (doctor, version, send-test-data) and
+// land in later milestones.
 package cmd
 
 import (

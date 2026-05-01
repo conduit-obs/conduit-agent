@@ -47,5 +47,5 @@ annotations:
   artifacthub.io/links: |
     - name: Source
       url: https://github.com/conduit-obs/conduit-agent
-    - name: Plan
-      url: https://github.com/conduit-obs/conduit-agent/blob/main/conduit-agent-plan/README.md
+    - name: ADRs
+      url: https://github.com/conduit-obs/conduit-agent/blob/main/docs/adr/README.md

@@ -143,5 +143,3 @@ recipe so this stops being roll-your-own.
   for the V0 docker profile contract and what's deferred to M9.
 - [`internal/expander/expander.go`](../../internal/expander/expander.go)
   §`resolveOTLPBindAddress` for the bind-address rule.
-- [`conduit-agent-plan/04-milestone-plan.md`](../../conduit-agent-plan/04-milestone-plan.md) §M4.
-- [`conduit-agent-plan/06-work-breakdown-structure.md`](../../conduit-agent-plan/06-work-breakdown-structure.md) EP-5.

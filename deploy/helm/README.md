@@ -16,8 +16,4 @@ Kubernetes Helm chart for the Conduit agent.
 | **M5.D** | pending | Goreleaser publishing of the chart to `oci://ghcr.io/conduit-obs/charts/conduit-agent` (registry venue per [ADR-0019](../../docs/adr/adr-0019.md); resolves OQ-2). |
 | **M5.E** | pending | `dashboards/k8s-cluster-overview.json` — pod-keyed, namespace-scoped board satisfying [`internal/profiles/PROFILE_SPEC.md`](../../internal/profiles/PROFILE_SPEC.md) §3. |
 
-See:
-
-- [`conduit-agent-plan/04-milestone-plan.md`](../../conduit-agent-plan/04-milestone-plan.md) §M5 — full acceptance criteria.
-- [`conduit-agent-plan/06-work-breakdown-structure.md`](../../conduit-agent-plan/06-work-breakdown-structure.md) EP-6 — work breakdown.
-- [`internal/profiles/PROFILE_SPEC.md`](../../internal/profiles/PROFILE_SPEC.md) — the platform profile contract M5.B+ delivers against.
+See [`internal/profiles/PROFILE_SPEC.md`](../../internal/profiles/PROFILE_SPEC.md) for the platform profile contract M5.B+ delivers against.

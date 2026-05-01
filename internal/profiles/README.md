@@ -29,6 +29,3 @@ Two rules every fragment file must follow:
 ## See also
 
 - [`PROFILE_SPEC.md`](PROFILE_SPEC.md) — the cross-platform contract every new profile must satisfy (telemetry shape, repo deliverables, dashboard quality bar, PR checklist). Boards are tailored per platform, not forced into a shared skeleton.
-- [`conduit-agent-plan/03-technical-architecture-v0.md`](../../conduit-agent-plan/03-technical-architecture-v0.md) §"Pipelines".
-- [`conduit-agent-plan/06-work-breakdown-structure.md`](../../conduit-agent-plan/06-work-breakdown-structure.md) STORY-10.1 through STORY-10.4.
-- [`conduit-agent-plan/04-milestone-plan.md`](../../conduit-agent-plan/04-milestone-plan.md) §M3 and §M9.

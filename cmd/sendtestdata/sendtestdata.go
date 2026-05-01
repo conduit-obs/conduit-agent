@@ -16,9 +16,7 @@ RED dimension model and resource enrichment expectations.
 Used by conduit doctor smoke tests, the 30-minute demo, and CI E2E tests
 against a Honeycomb sandbox.
 
-In M1 this is a stub. Real behavior lands by M10.
-
-See conduit-agent-plan/01-product-requirements.md FR-12.`
+In M1 this is a stub. Real behavior lands by M10.`
 
 // NewCommand returns the M1 stub for `conduit send-test-data`.
 func NewCommand() *cobra.Command {

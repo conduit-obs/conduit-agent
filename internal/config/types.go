@@ -13,9 +13,7 @@ package config
 // changes that must go through ADR review and SemVer (see ADR-0014).
 type AgentConfig struct {
 	// ServiceName is required. It populates resource attribute service.name on
-	// every emitted signal. Whether to allow per-instrumentation override or
-	// pin to this value is settled by OPEN-DECISION-7 and tracked in
-	// conduit-agent-plan/13-decision-log.md.
+	// every emitted signal.
 	ServiceName string `yaml:"service_name"`
 
 	// DeploymentEnvironment is required. It populates resource attribute
