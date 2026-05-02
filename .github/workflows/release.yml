@@ -35,11 +35,13 @@ jobs:
       - name: Verify the tag is signed
         # Maintainer-signed tags are part of the audit log. The
         # release runbook §4 documents the policy; this step is the
-        # CI enforcement.
+        # CI enforcement. Currently emits a warning rather than
+        # failing — the hard enforcement comes back when OQ-5
+        # (signing infrastructure ownership) lands, alongside the
+        # cosign / Authenticode gates.
         run: |
           if ! git verify-tag "${GITHUB_REF_NAME}" 2>/dev/null; then
-            echo "::error::tag ${GITHUB_REF_NAME} is not GPG-signed; release runbook §4 requires signed tags"
-            exit 1
+            echo "::warning::tag ${GITHUB_REF_NAME} is not GPG-signed; release runbook §4 will require signed tags once OQ-5 lands"
           fi
 
       - uses: actions/setup-go@v5

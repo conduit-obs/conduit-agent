@@ -105,11 +105,13 @@ git pull --ff-only
 git log --oneline -5
 
 # Tag with a v-prefix per Go module conventions.
-git tag -s -m "v0.x.y" v0.x.y       # signed tag; -s is required.
+# Once OQ-5 (signing infra) lands the `-s` flag is required. Until
+# then the workflow accepts annotated tags and emits a warning.
+git tag -a -m "v0.x.y" v0.x.y       # annotated; promote to `-s` post-OQ-5.
 git push origin v0.x.y
 ```
 
-The signed tag is the audit log; CI verifies the signature against the maintainer's GPG key as a sanity check before the publish job runs.
+The signed tag is the audit log; CI verifies the signature against the maintainer's GPG key as a sanity check before the publish job runs. The verification is currently a warning; it becomes a hard gate when OQ-5 lands.
 
 ---
 
