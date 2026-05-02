@@ -27,18 +27,29 @@ filelog/system:
     - /var/log/*.[0-9]
     - /var/log/*.[0-9].gz
   start_at: end
-  # BSD syslog parser. Modern Linux distros still write /var/log/syslog,
-  # /var/log/messages, /var/log/auth.log, and /var/log/secure in this
-  # format ("Mon  D HH:MM:SS host process[pid]: message"). RFC5424 lines
-  # land in journald rather than these files, so a single-format parser
-  # is enough for V0.
+  # Two-format parser. rsyslog ships two file templates and modern
+  # Linux distros disagree on the default:
   #
-  # The parsed timestamp + hostname are dropped because filelog's
-  # observed time and resourcedetection's host.name are authoritative.
-  # Lines that don't match are forwarded unparsed (on_error: send).
+  #   BSD / RFC3164      "May  2 14:24:53 host proc[pid]: msg"
+  #     RHEL 9, Alpine, older Debian/Ubuntu (RSYSLOG_TraditionalFileFormat)
+  #
+  #   ISO 8601 high-res  "2026-05-02T14:24:53.001012-04:00 host proc[pid]: msg"
+  #     Ubuntu 22.04+, Debian 12+ (RSYSLOG_FileFormat — the new default)
+  #     The fractional seconds, 'T' separator, and offset (with optional
+  #     colon, or 'Z') are all variable; the alternation below is loose
+  #     enough to match every variant that's been in the wild.
+  #
+  # Some fleets write both formats across different log files on the same
+  # host (rsyslog can pick a template per ruleset), so we need both.
+  #
+  # The parsed timestamp + hostname are dropped because filelog's observed
+  # time and resourcedetection's host.name are authoritative. Lines that
+  # match neither alternative are forwarded unparsed (on_error: send) so
+  # we never drop log data because of a format we haven't seen yet —
+  # multi-line stack traces and kernel ringbuffer continuations land here.
   operators:
     - type: regex_parser
-      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
+      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
       on_error: send
     - type: remove
       field: attributes.bsd_ts
