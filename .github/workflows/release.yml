@@ -85,16 +85,16 @@ jobs:
         # The .goreleaser.yaml uses `version: 2` schema, which
         # requires the goreleaser v2.x binary — v1.x errors with
         # "only configurations files on version: 1 are supported".
-        # MSI is skipped here because the windows-msi job below is
-        # already gated on OQ-5 (`if: false`); building the MSI in
-        # this Linux job would also require msitools/wixl that we
-        # don't currently install. Re-enable the MSI step in
-        # goreleaser when OQ-5 lands and the windows-msi job is
-        # turned on.
+        # MSI is currently a non-deliverable: goreleaser v2 dropped
+        # the top-level `msi:` builder, and the windows-msi job
+        # below is `if: false` until OQ-5 (signing infrastructure
+        # ownership) lands. When OQ-5 is resolved, the windows-msi
+        # job comes back on and produces the MSI directly with WiX
+        # on windows-latest.
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> 2"
-          args: release --clean --skip=msi
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The snapshot path skips signing if the maintainer GPG

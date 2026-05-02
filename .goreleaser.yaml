@@ -197,35 +197,24 @@ docker_manifests:
       - "ghcr.io/conduit-obs/conduit-agent:latest-amd64"
       - "ghcr.io/conduit-obs/conduit-agent:latest-arm64"
 
-# Windows MSI (M6.C). Produced by goreleaser's msi: support, which can run
-# either the WiX toolset (candle.exe + light.exe on Windows) or the
-# msitools port (wixl on linux/macOS). The MSI installs conduit.exe under
-# %PROGRAMFILES%\Conduit\ and the default config + env under
-# %PROGRAMDATA%\Conduit\, registers the Windows Service "conduit" via
-# the WiX <ServiceInstall> element, and applies the M6.C
-# config|noreplace semantic on conduit.yaml / conduit.env so MSI upgrades
-# preserve operator edits.
+# Windows MSI — DEFERRED until OQ-5 (signing infrastructure
+# ownership) lands. The MSI install path lives in the same package
+# layout used by deploy/windows/wix/conduit.wxs:
 #
-# WiX `-d` substitution variables in the .wxs:
-#   binary       absolute path to the conduit.exe staged by the build
-#   yaml_default deploy/windows/conduit.yaml.default
-#   env_default  deploy/windows/conduit.env.default
-#   Version      release version (no `v` prefix)
+#   conduit.exe under %PROGRAMFILES%\Conduit\
+#   default conduit.yaml + conduit.env under %PROGRAMDATA%\Conduit\
+#   Windows Service "conduit" registered via the WiX <ServiceInstall>
+#   config|noreplace semantic on conduit.yaml / conduit.env so MSI
+#     upgrades preserve operator edits
 #
-# Authenticode signing (signtool.exe / osslsigncode for both the inner
-# conduit.exe and the outer .msi) lands at M12 alongside cosign / GPG.
-# EV cert procurement is gated on OQ-5.
-msi:
-  - id: conduit
-    name: 'conduit-{{ .Version }}-{{ .Arch }}'
-    wxs: deploy/windows/wix/conduit.wxs
-    extra_files:
-      - deploy/windows/conduit.yaml.default
-      - deploy/windows/conduit.env.default
-    ids:
-      - conduit
-    replace: true
-    mod_timestamp: '{{ .CommitTimestamp }}'
+# Goreleaser v1.x had a top-level `msi:` builder. v2 restructured
+# packaging — when OQ-5 lands the MSI build comes back via the
+# .github/workflows/release.yml `windows-msi` job (currently
+# `if: false`), which builds with the WiX toolset directly on
+# windows-latest and signs with Authenticode. That job will also
+# upload the .msi to the release as an extra artifact, mirroring
+# what the v1 `msi:` block produced. EV cert procurement is gated
+# on OQ-5 alongside the cosign keys.
 
 # Ship install_linux.sh, the systemd unit, and the Windows install /
 # uninstall scripts alongside the release archives so curl-pipe-bash and
