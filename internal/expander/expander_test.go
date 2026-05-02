@@ -521,6 +521,15 @@ func TestExpand_K8sProfile_LoadsFragments(t *testing.T) {
 		`kubeletstats:`,
 		`endpoint: ${env:K8S_NODE_NAME}:10250`,
 		`auth_type: serviceAccount`,
+		// kubeletstats opt-in metrics enabled by Conduit (M5.E) so the
+		// default k8s-cluster-overview board has the columns it needs:
+		// container.uptime + k8s.pod.uptime are the restart proxy until
+		// k8sclusterreceiver ships; the {cpu,memory}_limit_utilization
+		// pair is the "% of limit" reading SREs reach for first.
+		`container.uptime:`,
+		`k8s.pod.uptime:`,
+		`k8s.pod.cpu_limit_utilization:`,
+		`k8s.pod.memory_limit_utilization:`,
 		`filelog/k8s:`,
 		`/var/log/pods/*/*/*.log`,
 		`type: container`,
@@ -734,12 +743,24 @@ func TestExpand_UnknownMode(t *testing.T) {
 // "transform/logs:" don't mislead the lookup.
 func pipelineSection(t *testing.T, out, pipeline string) string {
 	t.Helper()
-	header := "\n    " + pipeline + ":\n"
-	idx := strings.Index(out, header)
+	// Anchor the search inside the `service.pipelines:` block so a
+	// receiver-level `metrics:` enable-list (e.g. kubeletstats's
+	// `metrics: { container.uptime: { enabled: true }, ... }`) does
+	// not collide with the `metrics:` pipeline section. Both sit at
+	// 4-space indent, so a global `"\n    metrics:\n"` would match
+	// whichever appears first.
+	pipelinesAnchor := "\n  pipelines:\n"
+	pipelinesIdx := strings.Index(out, pipelinesAnchor)
+	if pipelinesIdx == -1 {
+		t.Fatalf("service.pipelines: block not found in:\n%s", out)
+	}
+	pipelinesBody := out[pipelinesIdx+len(pipelinesAnchor):]
+	header := "    " + pipeline + ":\n"
+	idx := strings.Index(pipelinesBody, header)
 	if idx == -1 {
 		t.Fatalf("pipeline %q not found in:\n%s", pipeline, out)
 	}
-	body := out[idx+len(header):]
+	body := pipelinesBody[idx+len(header):]
 	// Stop at the next pipeline header (also at 4-space indent) so we
 	// don't bleed into the next section.
 	if next := strings.Index(body, "\n    "); next != -1 {

@@ -18,6 +18,28 @@
 # self-signed serving certs that aren't reachable from the cluster's
 # trust bundle. Operators with a managed kubelet PKI should drop this
 # flag via overrides: in their conduit.yaml.
+#
+# The metrics: block enables a small set of upstream-disabled-by-default
+# metrics that the M5.E default board ("k8s-cluster-overview") needs to
+# answer the questions Datadog / Grafana operators reach for first:
+#
+#   container.uptime / k8s.pod.uptime     — only restart proxy we have
+#                                           short of shipping k8sclusterreceiver,
+#                                           which would emit k8s.container.restarts
+#                                           directly. A drop in container.uptime
+#                                           to ~0 means a container restarted.
+#
+#   k8s.pod.cpu_limit_utilization         — "is this pod hot relative to its
+#   k8s.pod.memory_limit_utilization        limit?" — what an SRE actually
+#                                           wants to know, vs. raw cores / bytes
+#                                           that depend on the workload's shape.
+#                                           Only emitted when the pod has limits
+#                                           set, so workloads without limits show
+#                                           up only in the absolute-cores panels.
+#
+# These are intentionally a small additive set — no cardinality blow-up
+# (same per-pod / per-container fan-out as the defaults), no node-relative
+# variants (left to operators who know they want them via overrides:).
 kubeletstats:
   collection_interval: 60s
   auth_type: serviceAccount
@@ -27,3 +49,12 @@ kubeletstats:
     - node
     - pod
     - container
+  metrics:
+    container.uptime:
+      enabled: true
+    k8s.pod.uptime:
+      enabled: true
+    k8s.pod.cpu_limit_utilization:
+      enabled: true
+    k8s.pod.memory_limit_utilization:
+      enabled: true
