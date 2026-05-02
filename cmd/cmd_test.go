@@ -28,11 +28,9 @@ var allSubcommands = []string{
 // when invoked without arguments. Cross-reference with the milestone plan as
 // commands are wired up:
 //
-//   - doctor          stub until M11
 //   - version         stub until M3 (ldflag injection)
 //   - send-test-data  stub until M11
 var stubSubcommands = []string{
-	"doctor",
 	"version",
 	"send-test-data",
 }

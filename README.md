@@ -8,7 +8,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 
 ## Status
 
-**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), M6 (source-side; signing + Windows Server smoke test gated on M12 CI), M7, M8, M9, and M10 (schema + expander; runtime probes deferred to M11.C) done.**
+**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), M6 (source-side; signing + Windows Server smoke test gated on M12 CI), M7, M8, M9, M10 (schema + expander; runtime probes integrated into M11), and M11 (7 of 11 FR-8 checks implemented; reserved anchors for k8s.permissions / queue.health / memory.pressure / cardinality.observed) done.**
 
 | Step | Scope | Status |
 |---|---|---|
@@ -40,6 +40,11 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M10.A** | Persistent queue (`filestorage` extension + per-exporter `sending_queue.storage`). New `output.persistent_queue: { enabled, dir }` schema; off by default. `dir` defaults to `/var/lib/conduit/queue`; validator rejects relative paths and `/tmp` / `/dev/shm`. When enabled, `service.extensions: [health_check, file_storage]`. | done |
 | **M10.B** | Honeycomb + Refinery routing (`output.honeycomb.traces.via_refinery: { endpoint, insecure }`). The expander emits a second exporter `otlp/refinery` (gRPC, same `x-honeycomb-team` header) and routes the traces pipeline through it; metrics + logs continue through `otlphttp/honeycomb`. Refinery is a routing choice, not a destination switch — the API key stays the same. | done |
 | **M10.C** | Gateway TLS-required-by-default. New `output.gateway.insecure: bool` (default false). Expander unconditionally renders `tls: { insecure: <bool> }` on the gateway exporter (and on the M10.B refinery exporter) so `conduit preview` makes the TLS posture visible at config-review time. | done |
+| **M11.A** | `internal/doctor` framework: Severity / Result / Check / Definition types, `Run` loop, `--json` envelope sorted by ID, `--check` filter (matches CDT IDs, exact titles, or title prefixes like `output`), human report grouped by severity (FAIL → WARN → PASS → SKIP), exit-non-zero-on-fail. | done |
+| **M11.B** | Config doctor checks: CDT0001 (`config.syntax`) wraps `internal/config.Validate` — one Result per `ValidationError.Issues` entry. CDT0501 (`config.cardinality_warnings`) routes RED denylist hits to a separate docs anchor pointing at ADR-0006. | done |
+| **M11.C** | Output doctor checks: CDT0101 (`output.endpoint_reachable`) does TCP+TLS handshake against the resolved endpoint; CDT0102 (`output.auth`) validates non-empty auth values + accepts `${env:NAME}` placeholders without dereferencing; CDT0103 (`output.tls_warning`) fires Warn on every `insecure: true` override per AC-06.3. | done |
+| **M11.D** | Receiver / version doctor checks: CDT0201 (`receiver.ports`) probes 4317 + 4318 with /proc/net/tcp PID resolution on linux; CDT0202 (`receiver.permissions`) parses the rendered YAML for filelog include paths and stats each match; CDT0403 (`version.compat`) is informational PASS with the conduit + otelcol-core fingerprint. | done |
+| **M11.E** | `cmd/doctor` wired to the framework with `--json`, `--check`, `--config` flags; canonical fix doc at [`docs/troubleshooting/cdt-codes.md`](docs/troubleshooting/cdt-codes.md). Reserved anchors for CDT0301 (k8s.permissions), CDT0401 (queue.health), CDT0402 (memory.pressure), CDT0510 (cardinality.observed) — those checks need a k8s API client / running collector / telemetry feedback loop, so the IDs ship now and the implementations follow. | done |
 
 M5 ships in slices, mirroring the Linux / Docker pattern: M5.A was the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wired the **kubelet / container-log / `k8sattributes` defaults**, M5.C added **RBAC + host bind mounts** so those receivers actually have access to what they need plus the kind smoke recipe to prove it, M5.D landed the **chart packaging + OCI publishing recipe** with cosign signing, and M5.E ships [`dashboards/k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — a pod-keyed, namespace-scoped board with a six-section narrative (Cluster shape → Compute absolute → Compute relative to limits → Network → Filesystem → Logs) — plus the small additive set of opt-in `kubeletstats` metrics the board needs. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
@@ -51,7 +56,7 @@ You can run, against any conduit.yaml:
 ./bin/conduit run                -c conduit.yaml   # boots the embedded collector; OTLP on :4317/:4318 plus profile receivers
 ```
 
-`./bin/conduit doctor`, `./bin/conduit version`, and `./bin/conduit send-test-data` still exit non-zero with `not implemented; see milestone <Mn>` and land in later milestones.
+`./bin/conduit doctor` runs the M11 check catalog (config / receiver / output / version) — see [`docs/troubleshooting/cdt-codes.md`](docs/troubleshooting/cdt-codes.md). `./bin/conduit version` and `./bin/conduit send-test-data` still exit non-zero with `not implemented; see milestone <Mn>` and land in later milestones.
 
 ## Install on Linux
 
