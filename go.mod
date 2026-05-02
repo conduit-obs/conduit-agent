@@ -1,6 +1,6 @@
 module github.com/conduit-obs/conduit-agent
 
-go 1.25.0
+go 1.25.9
 
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector v0.151.0

@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Pre-flight (test + vulncheck on the exact tagged commit)
@@ -134,7 +134,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: 'go.mod'
       - name: Build the conduit binary
         run: go build -o bin/conduit.exe ./
       - name: Build the MSI via WiX

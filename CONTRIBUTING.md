@@ -44,7 +44,7 @@ make lint        # runs golangci-lint
 
 Required tooling:
 
-- Go 1.23 or newer.
+- Go 1.25.9 or newer (matches the `go` directive in `go.mod`).
 - `golangci-lint` (install via `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`).
 
 `make install-ocb` downloads a pinned OpenTelemetry Collector Builder binary into `./bin/`. Required when you change [`builder-config.yaml`](builder-config.yaml) and need to regenerate the embedded collector.
