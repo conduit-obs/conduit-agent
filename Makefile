@@ -44,7 +44,8 @@ OCB_URL := https://github.com/open-telemetry/opentelemetry-collector-releases/re
 
 .PHONY: help build test vendor lint fmt install-ocb build-ocb release-snapshot clean \
         kind-up kind-image kind-load kind-deploy kind-test kind-down kind-smoketest \
-        helm-lint helm-package helm-push helm-sign helm-publish
+        helm-lint helm-package helm-push helm-sign helm-publish \
+        update-goldens vulncheck
 
 help: ## Show available make targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -55,6 +56,13 @@ build: ## Build the conduit binary into ./bin/conduit (M1: stubs only, no embedd
 
 test: ## Run all unit tests
 	$(GO) test ./...
+
+update-goldens: ## Rewrite internal/expander/testdata/goldens/<case>/expected.yaml from the current renderer (M12.B)
+	$(GO) test ./internal/expander -run TestExpand_Goldens -update
+
+vulncheck: ## Run govulncheck against the module — release-blocker per [07-testing-and-conformance-plan.md] §M12 release gates
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck ./...
 
 vendor: ## Resolve module dependencies (M1: no `go mod vendor` until M2 forces it)
 	$(GO) mod tidy

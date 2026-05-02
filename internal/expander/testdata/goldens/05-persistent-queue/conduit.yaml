@@ -1,0 +1,17 @@
+# 05-persistent-queue — M10.A audit.
+#
+# Proves: output.persistent_queue.enabled: true renders the
+# file_storage extension under extensions:, extends
+# service.extensions to include it, and gates each active exporter's
+# sending_queue.storage on it.
+service_name: checkout
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}
+  persistent_queue:
+    enabled: true
+    dir: /var/lib/conduit/queue

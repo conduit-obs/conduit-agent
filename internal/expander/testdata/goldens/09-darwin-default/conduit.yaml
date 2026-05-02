@@ -1,0 +1,13 @@
+# 09-darwin-default — dev/local laptop install.
+#
+# Proves: profile.mode: darwin loads the macOS hostmetrics fragment
+# and the macOS-side filelog/system fragment. No journald (Linux-only).
+# OTLP binds to 127.0.0.1 (host profile default).
+service_name: dev
+deployment_environment: local
+profile:
+  mode: darwin
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

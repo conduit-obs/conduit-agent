@@ -1,0 +1,18 @@
+# 04-otlp-vendor-headers — generic OTLP/HTTP egress.
+#
+# Proves: output.mode: otlp wires otlphttp/otlp with operator-supplied
+# headers + compression. Use this case to detect any header-rendering
+# regression that would silently break vendor auth (Datadog DD-API-KEY,
+# Grafana Cloud Authorization: Bearer, etc.).
+service_name: checkout
+deployment_environment: prod
+profile:
+  mode: none
+output:
+  mode: otlp
+  otlp:
+    endpoint: https://otlp.example.com
+    headers:
+      Authorization: Bearer ${env:VENDOR_TOKEN}
+      DD-API-KEY: ${env:DD_API_KEY}
+    compression: gzip

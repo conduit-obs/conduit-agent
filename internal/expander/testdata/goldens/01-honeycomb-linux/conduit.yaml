@@ -1,0 +1,14 @@
+# 01-honeycomb-linux — the canonical Linux install.
+#
+# Proves: profile.mode: linux loads hostmetrics + filelog/system +
+# journald; output.mode: honeycomb wires otlphttp/honeycomb with the
+# x-honeycomb-team header pre-resolved at startup; RED is on by
+# default with the documented dimension set.
+service_name: checkout
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

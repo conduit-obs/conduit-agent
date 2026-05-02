@@ -1,0 +1,15 @@
+# 03-gateway-tls-required — US-06 journey, AC-06.3.
+#
+# Proves: gateway exporter ships an explicit `tls: { insecure: false }`
+# block by default so `conduit preview` makes the security posture
+# visible. The header is preserved verbatim through the renderer.
+service_name: checkout
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: gateway
+  gateway:
+    endpoint: gateway.observability.svc:4317
+    headers:
+      x-tenant: team-foo

@@ -1,0 +1,17 @@
+# 02-honeycomb-via-refinery — US-07 journey.
+#
+# Proves: traces route through otlp/refinery (gRPC, same
+# x-honeycomb-team header); metrics + logs continue through
+# otlphttp/honeycomb. Refinery is a routing choice, not a
+# destination switch — the API key stays the same.
+service_name: checkout
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}
+    traces:
+      via_refinery:
+        endpoint: refinery.observability.svc:4317

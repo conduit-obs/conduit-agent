@@ -57,10 +57,40 @@ jobs:
           # which doesn't exist on CI runners; it must fail loud, not silent.
           ./bin/conduit run; rc=$?
           if [ $rc -eq 0 ]; then echo "expected non-zero exit when default config is missing"; exit 1; fi
-          # Stub commands still surface NotImplementedError until their milestone.
-          ./bin/conduit doctor; rc=$?
-          if [ $rc -eq 0 ]; then echo "expected non-zero exit from doctor stub"; exit 1; fi
+          # 'conduit doctor' against a missing config should also fail (M11).
+          ./bin/conduit doctor -c /nonexistent/conduit.yaml; rc=$?
+          if [ $rc -eq 0 ]; then echo "expected non-zero exit from doctor against a missing config"; exit 1; fi
           ./bin/conduit --help
+
+  goldens:
+    name: Renderer goldens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: Verify expander goldens are up to date
+        # The harness diffs every testdata/goldens/<case>/expected.yaml
+        # against a fresh render. Failure means a renderer change
+        # landed without `make update-goldens`. Fix locally with
+        # `make update-goldens` and commit the regenerated files.
+        run: go test ./internal/expander -run TestExpand_Goldens -count=1
+
+  doctor-anchors:
+    name: Doctor docs anchors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: Verify every CDT code has a docs section
+        # Catches "added a check but forgot the troubleshooting doc"
+        # before it ships. See docs/troubleshooting/cdt-codes.md.
+        run: go test ./internal/doctor -run TestDocsAnchor -count=1
 
   vulncheck:
     name: govulncheck
@@ -72,6 +102,11 @@ jobs:
           go-version: "1.23"
           cache: true
       - name: govulncheck
+        # Per [07-testing-and-conformance-plan.md] §M12 release gates,
+        # govulncheck is release-blocking on HIGH/CRITICAL findings.
+        # The PR-level run surfaces every finding (HIGH and below) so
+        # operators see the trend; release-blocking happens in
+        # release.yml when the tag is cut.
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...

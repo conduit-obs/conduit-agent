@@ -1,0 +1,14 @@
+# 06-k8s-default — most common k8s install.
+#
+# Proves: profile.mode: k8s loads kubeletstats + filelog/k8s with
+# the upstream `container` operator + k8sattributes processor with
+# the right metadata extraction list, and binds OTLP receivers to
+# 0.0.0.0 so peer pods on the same node can reach the agent.
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+profile:
+  mode: k8s
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

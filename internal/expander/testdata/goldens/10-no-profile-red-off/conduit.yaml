@@ -1,0 +1,17 @@
+# 10-no-profile-red-off — minimal-renderable.
+#
+# Proves: profile.mode: none + metrics.red.enabled: false produces
+# the smallest possible rendered config (just OTLP receiver +
+# core processors + egress + debug). Used as the renderer's
+# regression baseline — any new always-on element shows up here.
+service_name: minimal
+deployment_environment: ci
+profile:
+  mode: none
+metrics:
+  red:
+    enabled: false
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

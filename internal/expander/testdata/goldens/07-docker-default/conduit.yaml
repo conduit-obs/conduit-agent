@@ -1,0 +1,15 @@
+# 07-docker-default — compose / sidecar install.
+#
+# Proves: profile.mode: docker loads the docker hostmetrics
+# fragment (root_path: /hostfs) and binds OTLP to 0.0.0.0 so peer
+# containers on the same network can reach the agent. The
+# corresponding bind-mount + pid: host setup lives in
+# deploy/docker/compose-linux-host.yaml.
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+profile:
+  mode: docker
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

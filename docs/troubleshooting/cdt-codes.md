@@ -293,6 +293,106 @@ broader cardinality model.
 
 ---
 
+## CDT0301 — k8s-permissions
+
+**Status**: reserved. Implementation lands in M11 follow-up; the
+section exists today so dashboards / runbooks that link to
+`#cdt0301-k8s-permissions` resolve cleanly during the rollout window.
+
+**What it will check**: when running on a Kubernetes pod, the
+ServiceAccount can `get` and `list` `pods`, `nodes`, and
+`namespaces` (the verbs the `k8sattributes` processor needs to
+populate workload metadata). Surfaces missing verbs by name so the
+operator can grant the right ClusterRole rather than guessing.
+
+**Why it will matter**: AC-14 specifically calls out RBAC failures
+because they're the most common k8s-side install issue and the agent
+silently degrades to "no k8s.* attributes" without it.
+
+**How to fix (today, before the check ships)**: install Conduit via
+the Helm chart with `rbac.create: true` (the default) — see
+[`deploy/helm/conduit-agent/`](../../deploy/helm/conduit-agent/README.md).
+Manual RBAC manifests are in the same directory.
+
+---
+
+## CDT0401 — queue-health
+
+**Status**: reserved. Implementation lands when the doctor framework
+grows a "scrape my own metrics" mode (the agent emits Prometheus
+metrics on `:8888` by default; the doctor can read them without a
+full collector connection).
+
+**What it will check**: the persistent queue (filestorage) size,
+drop rate, and retry rate over the `--since` window. Warns when
+drops are non-zero (telemetry was lost) or retries are climbing
+(destination is unhealthy).
+
+**Why it will matter**: silent telemetry loss is the worst class of
+observability failure — by definition you don't see it on the
+dashboard you're using to look for problems. Doctor surfacing it
+cuts the time-to-diagnose substantially.
+
+**How to fix (today, before the check ships)**: enable the
+persistent queue (`output.persistent_queue.enabled: true`, see M10.A)
+and check the upstream collector's own metrics on `:8888/metrics`
+directly: look for `otelcol_exporter_queue_size`,
+`otelcol_exporter_send_failed_*`, `otelcol_exporter_enqueue_failed_*`.
+
+---
+
+## CDT0402 — memory-pressure
+
+**Status**: reserved. Same self-telemetry-scraping gate as CDT0401.
+
+**What it will check**: the `memorylimiter` processor's activation
+count over the `--since` window. Warns when activations are non-zero
+(the limiter is dropping data to keep the agent inside its memory
+budget) and fails when activations are sustained at high rate (the
+budget is too small for the workload).
+
+**Why it will matter**: an agent silently dropping data because of
+memory pressure looks identical to "no traffic" from the operator's
+side. Doctor surfacing the activation count makes the diagnosis
+obvious.
+
+**How to fix (today, before the check ships)**: increase the agent's
+memory budget (the Helm chart sets `resources.limits.memory: 512Mi`
+by default; raise it). On systemd, edit `/etc/systemd/system/conduit.service.d/`
+to set `MemoryMax`. Read the upstream metric
+`otelcol_processor_refused_metric_points` / `_log_records` /
+`_spans` to confirm the limiter is the cause.
+
+---
+
+## CDT0510 — cardinality-observed
+
+**Status**: reserved. Implementation lands when the cardinality
+observer ships (a separate workstream) so the doctor has runtime
+cardinality data to surface.
+
+**What it will check**: the per-dimension cardinality the
+`span_metrics` connector has actually observed over `--since`,
+compared against `cardinality.observed_threshold` (default 1000).
+Warns when any dimension exceeds the threshold; the message names
+the dimension and the observed count.
+
+**Why it will matter**: cardinality blow-ups are silent (the
+overflow series tagged `otel.metric.overflow="true"` absorbs them
+gracefully) but expensive at the destination. Doctor surfacing
+"this dimension is at 14k unique values, threshold is 1k" gives the
+operator a cheap signal to act on before the destination's bill
+arrives.
+
+**How to fix (today, before the check ships)**: read the upstream
+metric `otelcol_span_metrics_aggregated_combinations` directly off
+`:8888/metrics` and watch for the
+`otelcol_span_metrics_overflow_combinations` rate climbing. If
+overflow is accumulating, identify the culprit dimension by
+querying the dimension distribution at the destination and prune.
+
+---
+
 ## Reading the JSON output
 
 `conduit doctor --json` emits a single envelope with the following

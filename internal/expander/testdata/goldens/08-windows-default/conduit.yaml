@@ -1,0 +1,14 @@
+# 08-windows-default — M6 path.
+#
+# Proves: profile.mode: windows loads the windows hostmetrics
+# fragment (CPU Queue Length surfaces as system.cpu.load_average.1m
+# via the `load` scraper) and the windowseventlog/{application,system}
+# receivers. The Security channel is intentionally not loaded.
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+profile:
+  mode: windows
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}
