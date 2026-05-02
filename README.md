@@ -8,7 +8,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 
 ## Status
 
-**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), and M8 done.**
+**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), M8, and M9 (M9.A / M9.B / M9.C / M9.D — M9.E gated on M6 Windows) done.**
 
 | Step | Scope | Status |
 |---|---|---|
@@ -27,8 +27,11 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M5.D** | Helm chart packaging + OCI publishing recipe (`make helm-package` / `make helm-publish`) targeting `oci://ghcr.io/conduit-obs/charts/conduit-agent` per ADR-0019, with cosign keyless-OIDC signing and a documented verification flow (`cosign verify-blob`). The first published version ships with v0.0.1; CI integration lands at M12. | done (CI hook lands at M12) |
 | **M5.E** | [`dashboards/k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — pod-keyed, namespace-scoped, narrative-driven (Cluster shape → Compute absolute → Compute relative to limits → Network → Filesystem → Logs) per [PROFILE_SPEC.md](internal/profiles/PROFILE_SPEC.md) §3. Pulls in a small opt-in metric set (`container.uptime`, `k8s.pod.{cpu,memory}_limit_utilization`) enabled in `internal/profiles/k8s/kubelet.yaml`. | done |
 | **M8** | RED-from-spans on by default: `span_metrics` connector tees the traces pipeline into request count / error count / duration histogram metrics with the documented default dimensions (`service.name`, `deployment.environment`, `http.{route,method,status_code}`, `rpc.*`, `messaging.*`, `k8s.namespace.name`, `cloud.region`, `team`), schema-time denylist on high-cardinality attributes (CDT0501), `aggregation_cardinality_limit` cap (default 5000) with overflow tagged `otel.metric.overflow="true"`, and a stderr dimension projection from `conduit preview`. See [`docs/adr/adr-0006.md`](docs/adr/adr-0006.md). | done |
-
-The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
+| **M9.A** | Docker host-metrics fragment ([`internal/profiles/docker/hostmetrics.yaml`](internal/profiles/docker/hostmetrics.yaml)) with `root_path: /hostfs`; matching `pid: host` + `/proc` / `/sys` / `/` bind-mount recipe in [`deploy/docker/compose-linux-host.yaml`](deploy/docker/compose-linux-host.yaml). Resolves the M4 docker-fragment deferral. | done |
+| **M9.B** | Default secret-redaction in `transform/logs`: AKIA-prefixed AWS access key ids, eyJ-prefixed JWTs, case-insensitive `password\|secret\|token\|...=value` patterns. Default-on; redaction sits ahead of `normalized_message` so the grouping column inherits the redacted state. | done |
+| **M9.C** | JSON log body parsing + `trace_id` correlation: parses JSON-bodied logs (zerolog / pino / structlog / slog) and lifts `trace_id` / `span_id` (three naming conventions), `msg` / `message` into `attributes["message"]`, and `level` / `severity` into a five-level `severity_number` mapping. SDK-set values protected by empty-string + `SEVERITY_NUMBER_UNSPECIFIED` guards. | done |
+| **M9.D** | [`dashboards/docker-host-overview.json`](dashboards/docker-host-overview.json) — two-narrative board (compose host metrics keyed off `host.name` + peer-app RED keyed off `service.name` from M8's `span_metrics` connector), filesystem panel keys on the `/var/lib/docker/*` mountpoints, network panel filters out `lo` / `docker0` / `br-*` / `veth*`. | done |
+| **M9.E** | Windows hostmetrics + Event Log + filelog allowlist + `windows-host-overview.json`. | deferred to M6 (depends on Windows service path) |
 
 M5 ships in slices, mirroring the Linux / Docker pattern: M5.A was the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wired the **kubelet / container-log / `k8sattributes` defaults**, M5.C added **RBAC + host bind mounts** so those receivers actually have access to what they need plus the kind smoke recipe to prove it, M5.D landed the **chart packaging + OCI publishing recipe** with cosign signing, and M5.E ships [`dashboards/k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — a pod-keyed, namespace-scoped board with a six-section narrative (Cluster shape → Compute absolute → Compute relative to limits → Network → Filesystem → Logs) — plus the small additive set of opt-in `kubeletstats` metrics the board needs. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
@@ -315,14 +318,33 @@ conduit: RED metrics from spans: enabled (cardinality_limit=5000, span dims=9, r
 
 Operators who run `span_metrics` on a downstream gateway (and don't want to double-count) set `metrics.red.enabled: false` to skip the connector. The `conduit doctor` command (M11) will surface the overflow-bucket count as `CDT0510` once an overflow appears, so cardinality drift is observable from the agent itself.
 
+### Default log handling (M9.B + M9.C)
+
+`transform/logs` is on by default for every platform and does four things in order:
+
+1. **Secret redaction** — masks `AKIA[0-9A-Z]{16}` (AWS access key ids), `eyJ`-prefixed JWTs, and case-insensitive `password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization=value` patterns in both `body` and `attributes["message"]`. Operators get a default-on credential safety net without reading docs; the regex set is intentionally narrow to avoid masking legitimate hex strings or base64 payloads. Tighter masking layers via [ADR-0012 overrides](docs/adr/adr-0012.md).
+2. **JSON body parsing + trace correlation** — when the log body is a JSON-looking string (`IsString(body)` plus a `^\\s*\\{` gate), parses it once into a per-record cache and lifts the well-known fields onto OTel semantic locations:
+   - `trace_id` from `trace_id` / `traceId` / `trace.id` (three naming conventions)
+   - `span_id` from `span_id` / `spanId` / `span.id`
+   - `msg` or `message` into `attributes["message"]`
+   - `level` or `severity` into `severity_text`, with a five-level mapping (trace / debug / info / warn / error / fatal — and the documented aliases `informational`, `warning`, `err`, `severe`, `critical`, `panic`, `emerg`) for `severity_number`
+
+   SDK-set values are protected by `trace_id.string == ""` / `attributes["message"] == nil` / `severity_number == SEVERITY_NUMBER_UNSPECIFIED` guards — a correctly-correlating SDK isn't overwritten by the agent's best-effort lift.
+3. **`normalized_message` for grouping** — copies the (now redacted, possibly JSON-lifted) `attributes["message"]` to `attributes["normalized_message"]` and masks UUIDs, IPv4s, generic `key=value`, and 4+ digit numbers so dashboards can group log templates without one-row-per-line cardinality.
+4. **Severity backfill** — defaults `severity_text=INFO` / `severity_number=SEVERITY_NUMBER_INFO` for records still at `UNSPECIFIED` after the prior steps (raw filelog from `/var/log/syslog` etc.); journald PRIORITY values and SDK-set severities pass through untouched.
+
+`conduit preview` shows the rendered statement blocks; `internal/expander/expander_test.go` (`TestExpand_TransformLogs_DefaultRedactionBlock`, `TestExpand_TransformLogs_JSONParsingBlock`) locks in block ordering + pattern presence.
+
 ## Default dashboards
 
 The Honeycomb boards Conduit ships out of the box live as checked-in JSON under [`dashboards/`](dashboards/):
 
 - [`macos-host-overview.json`](dashboards/macos-host-overview.json) — per-host overview for the darwin profile.
 - [`linux-host-overview.json`](dashboards/linux-host-overview.json) — Linux equivalent, with platform-appropriate filters (block-device-only filesystems, loopback excluded from network) and a swap-utilization panel that macOS deliberately omits.
+- [`k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — pod-keyed, namespace-scoped cluster overview for the k8s profile.
+- [`docker-host-overview.json`](dashboards/docker-host-overview.json) — two-narrative compose-stack board (host metrics keyed off `host.name` plus peer-app RED keyed off `service.name` from the M8 `span_metrics` connector).
 
-Future platform boards (Docker, Windows, k8s) land alongside their install milestones (M5 / M6) and at M9 for the Docker host overview, which depends on M9's host-metrics-from-container work. Each board is its own opinionated, narrative-driven dashboard tailored to what's distinctive about that platform's telemetry — a k8s board keys off pods and namespaces, a docker board off containers and compose services, a Windows board off Event Log channels — rather than a forced lowest-common-denominator panel skeleton. The cross-platform contract in [`internal/profiles/PROFILE_SPEC.md`](internal/profiles/PROFILE_SPEC.md) holds the *telemetry shape* (column names, severity defaults, resource attributes) constant; §3 of that doc spells out the dashboard quality bar boards are reviewed against.
+The Windows board (`windows-host-overview.json`) lands with M6. Each board is its own opinionated, narrative-driven dashboard tailored to what's distinctive about that platform's telemetry — a k8s board keys off pods and namespaces, a docker board off containers and compose services, a Windows board off Event Log channels — rather than a forced lowest-common-denominator panel skeleton. The cross-platform contract in [`internal/profiles/PROFILE_SPEC.md`](internal/profiles/PROFILE_SPEC.md) holds the *telemetry shape* (column names, severity defaults, resource attributes) constant; §3 of that doc spells out the dashboard quality bar boards are reviewed against.
 
 The CLI subcommand to apply these (`conduit board apply`, M11) reads them, but the file format is intentionally close to Honeycomb's `/1/boards` API so operators can also POST them by hand against `HONEYCOMB_CONFIG_API_KEY` (a *configuration* key — distinct from the ingest key in `conduit.yaml`). See [`dashboards/README.md`](dashboards/README.md) for the schema and auth model.
 
