@@ -1,16 +1,13 @@
 # Default values for conduit-agent.
 #
 # This file documents every knob the chart exposes. The chart deploys a
-# DaemonSet that runs the M5.B Kubernetes profile: per-node hostmetrics,
-# kubeletstats against the local kubelet, filelog/k8s for container logs,
-# and the k8sattributes processor enriching every pipeline. OTLP is also
-# accepted from peer pods at conduit-agent:4317 / :4318 and gets the same
+# DaemonSet running the Kubernetes profile end-to-end: per-node
+# hostmetrics (via the host bind mount under daemonset.hostMounts),
+# kubeletstats against the local kubelet (via the rbac.create
+# ClusterRole), filelog/k8s tailing /var/log/pods/*, and the
+# k8sattributes processor enriching every pipeline. OTLP is also accepted
+# from peer pods at conduit-agent:4317 / :4318 and gets the same
 # Kubernetes metadata enrichment.
-#
-# The matching ClusterRole + DaemonSet host bind mounts that kubeletstats
-# and hostmetrics need land in M5.C; until then expect RBAC errors from
-# kubeletstats / k8sattributes and pod-scoped (not node-scoped) views
-# from hostmetrics.
 
 # ---------------------------------------------------------------------------
 # Honeycomb output. Required for the default values; switch to `gateway`
@@ -64,13 +61,16 @@ conduit:
   # "staging", "us-east-1".
   deploymentEnvironment: production
 
-  # profile.mode in conduit.yaml. With profileMode=k8s the chart's pod
-  # ships per-node hostmetrics + kubeletstats + filelog/k8s and the
-  # k8sattributes processor on every pipeline (see
-  # internal/profiles/k8s/README.md). The matching ClusterRole + host
-  # mounts land in M5.C; until then kubeletstats / k8sattributes will
-  # surface RBAC errors and hostmetrics will report the pod's view of
-  # /proc instead of the node's.
+  # profile.mode in conduit.yaml. With profileMode=k8s (the default) the
+  # chart's pod ships per-node hostmetrics + kubeletstats + filelog/k8s
+  # and the k8sattributes processor on every pipeline. See
+  # internal/profiles/k8s/README.md for the receiver shape.
+  #
+  # Operators who want an OTLP-only relay (no kubelet, no host metrics,
+  # no container log tailing) should set profileMode=none AND
+  # daemonset.hostMounts.enabled=false AND daemonset.runAsRoot=false AND
+  # rbac.create=false to drop all the node-introspecting privileges this
+  # chart grants by default.
   #
   # Valid values: auto | linux | darwin | docker | k8s | none.
   profileMode: k8s
@@ -137,13 +137,46 @@ daemonset:
   hostNetwork: false
   dnsPolicy: ClusterFirstWithHostNet
 
+  # Host bind mounts for the M5.B hostmetrics + filelog/k8s receivers.
+  # When enabled, the DaemonSet:
+  #   - mounts the host root at /hostfs (read-only, mountPropagation=HostToContainer)
+  #   - mounts /var/log/pods and /var/log/containers (read-only)
+  #   - sets HOST_PROC_MOUNTINFO=/hostfs/proc/self/mountinfo so the
+  #     filesystem scraper sees the node's mount table
+  #   - turns on hostPID so the processes scraper sees node-wide PIDs
+  #
+  # Disable for an OTLP-only k8s relay (also set conduit.profileMode=none
+  # so hostmetrics doesn't scrape an empty /hostfs).
+  hostMounts:
+    enabled: true
+
+  # Run as UID 0 / GID 0. Required by the default profile (mode=k8s)
+  # because the kubelet's container log directories are mode 0700 owned
+  # by root, and /proc/<pid> entries for non-root user pods are not
+  # readable as a different unprivileged UID. Off-the-shelf Kubernetes
+  # node introspection assumes root; the upstream
+  # otel-collector-contrib helm chart's hostMetrics preset does the
+  # same thing.
+  #
+  # When false, the container falls back to the image's baked-in
+  # nonroot UID 65532 — fine for OTLP-only deployments
+  # (profileMode=none / docker), broken with the default fragments.
+  runAsRoot: true
+
 # ---------------------------------------------------------------------------
-# RBAC. The M5.B receivers (kubeletstats, k8sattributes) need
-# cluster-scoped read access to nodes/stats and pods, but the chart does
-# not yet ship a ClusterRole — that lands in M5.C alongside the matching
-# DaemonSet host bind mounts. Until then the agent will log RBAC errors
-# from those components on startup.
+# RBAC. The default M5.B fragment set (kubeletstats + k8sattributes)
+# needs cluster-scoped read access to nodes/stats, pods, namespaces, and
+# the apps + batch APIs that own pods. The ClusterRole granted here is
+# read-only and free of Secret access; review templates/clusterrole.yaml
+# to audit each rule against the receiver / processor that uses it.
+#
+# Disable rbac.create when your cluster manages RBAC out-of-band (e.g.
+# an admission controller injects it). The serviceAccount.name you point
+# at must already be bound to a ClusterRole with at least the same set.
 # ---------------------------------------------------------------------------
+rbac:
+  create: true
+
 serviceAccount:
   create: true
   # Override the auto-generated name when you need to bind external RBAC

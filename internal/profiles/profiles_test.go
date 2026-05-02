@@ -68,7 +68,7 @@ func TestLoad_ContentSanity(t *testing.T) {
 		{"linux", SignalSystemLogs, []string{"filelog/system:", "journald:"}},
 		{"darwin", SignalHostMetrics, []string{"hostmetrics:", "scrapers:"}},
 		{"darwin", SignalSystemLogs, []string{"filelog/system:", "/var/log/system.log"}},
-		{"k8s", SignalHostMetrics, []string{"hostmetrics:", "scrapers:", "system.cpu.utilization"}},
+		{"k8s", SignalHostMetrics, []string{"hostmetrics:", "root_path: /hostfs", "scrapers:", "system.cpu.utilization"}},
 		{"k8s", SignalKubelet, []string{"kubeletstats:", "auth_type: serviceAccount", "K8S_NODE_NAME"}},
 		{"k8s", SignalSystemLogs, []string{"filelog/k8s:", "/var/log/pods", "type: container"}},
 	}

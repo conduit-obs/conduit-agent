@@ -2,15 +2,15 @@
 
 DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
 
-> **Status — M5.A skeleton + M5.B fragments.** The chart ships the DaemonSet,
-> ConfigMap, ServiceAccount, Service, and an optional Secret. Default
-> `profile.mode: k8s` ships per-node `hostmetrics`, `kubeletstats` against
-> the local kubelet, `filelog/k8s` for `/var/log/pods/*`, and the
-> `k8sattributes` processor on every pipeline. The matching ClusterRole +
-> DaemonSet host bind mounts that those receivers need land in M5.C —
-> until then `kubeletstats` will hit RBAC errors and `hostmetrics` will
-> report the pod's view of `/proc` instead of the node's. Chart publishing
-> to `oci://ghcr.io/conduit-obs/charts/conduit-agent` lands in M5.D.
+> **Status — M5.A/B/C complete.** The chart ships the DaemonSet, ConfigMap,
+> ServiceAccount, Service, optional Secret, and ClusterRole +
+> ClusterRoleBinding. Default `profile.mode: k8s` ships per-node
+> `hostmetrics` (rooted at `/hostfs` via the chart bind mount),
+> `kubeletstats` against the local kubelet, `filelog/k8s` for
+> `/var/log/pods/*`, and the `k8sattributes` processor on every pipeline.
+> Chart publishing to `oci://ghcr.io/conduit-obs/charts/conduit-agent`
+> lands in M5.D; the default cluster + workload boards in M5.E. A kind
+> smoke recipe lives in the repo root `Makefile` (`make kind-smoketest`).
 
 ## What you get
 
@@ -26,11 +26,15 @@ DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
   container logs spliced into the matching pipelines, with every signal
   enriched with Kubernetes workload metadata (`k8s.namespace.name`,
   `k8s.pod.name`, `k8s.deployment.name`, ...).
-- A `ServiceAccount` per release. The chart does **not** yet bind a
-  ClusterRole — `kubeletstats` and `k8sattributes` will surface RBAC
-  errors in their logs until M5.C ships the matching role + role binding.
+- A `ServiceAccount` + read-only `ClusterRole` (pods, namespaces, nodes,
+  apps + batch workload kinds) bound by a `ClusterRoleBinding`. Disable
+  with `rbac.create=false` if your cluster manages RBAC out-of-band.
+- Host bind mounts that the M5.B receivers need: `/hostfs` (read-only,
+  `mountPropagation: HostToContainer`), `/var/log/pods`,
+  `/var/log/containers`. Disable with `daemonset.hostMounts.enabled=false`
+  for an OTLP-only relay (also set `conduit.profileMode=none`).
 
-## Install (M5.A/B — local source)
+## Install (local source)
 
 The chart is not yet published. Install from a clone:
 
@@ -94,8 +98,11 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `gateway.endpoint` | `""` | OTLP/gRPC URL of the gateway. Required when `gateway.enabled=true`. |
 | `image.repository` | `ghcr.io/conduit-obs/conduit-agent` | OCI image (per ADR-0019). |
 | `image.tag` | `""` (falls back to `Chart.appVersion`) | Pin a specific agent build. |
-| `daemonset.resources` | `requests: 50m / 96Mi`, `limits: 500m / 384Mi` | Sized for the OTLP relay path; the M5.B kubelet + filelog scrapers add modest steady-state load (single-digit % CPU per pod, ~50 MiB extra RSS on a busy node). Bump if memory_limiter starts dropping batches. |
+| `daemonset.resources` | `requests: 50m / 96Mi`, `limits: 500m / 384Mi` | Sized for the M5.B receiver set + k8sattributes. Bump if memory_limiter starts dropping batches. |
 | `daemonset.tolerations` | `[{operator: Exists}]` | Wide-open by default so the agent runs on system / GPU nodes too. Tighten for high-security clusters. |
+| `daemonset.hostMounts.enabled` | `true` | Mount `/hostfs` (the host root, read-only, with `HostToContainer` propagation) plus `/var/log/pods` and `/var/log/containers` so hostmetrics + filelog/k8s see the node. Disable for an OTLP-only relay (also flip `conduit.profileMode` to `none`). |
+| `daemonset.runAsRoot` | `true` | Run the conduit container as UID 0. Required by the default profile because kubelet log directories are mode 0700 root-owned and `/proc/<pid>` for non-root pods isn't readable as a different unprivileged UID. Flip to `false` together with `profileMode=none`/`docker` to fall back to the image's baked-in nonroot UID 65532. |
+| `rbac.create` | `true` | Create the ClusterRole + ClusterRoleBinding the M5.B receivers and processor need (read-only access to pods / namespaces / nodes / apps + batch workload kinds). Disable when your cluster manages RBAC out-of-band; review `templates/clusterrole.yaml` to audit the exact rule set. |
 | `serviceAccount.create` | `true` | Set false to bind the DaemonSet to an external SA. |
 | `service.enabled` | `true` | Cluster-internal Service for OTLP ingress. |
 
@@ -133,6 +140,16 @@ helm template conduit deploy/helm/conduit-agent \
   --set conduit.serviceName=smoketest \
   --set honeycomb.apiKey=hcaik_dummy
 ```
+
+## kind smoke test
+
+Repo root has `make kind-smoketest`, which spins up a disposable kind
+cluster (`conduit-smoke`), builds the agent image from the source
+Dockerfile, loads it into the cluster, helm-installs the chart with a
+dummy Honeycomb key, sends a test trace through the cluster Service, and
+greps the conduit pod logs for the trace before exiting. Use it to
+verify chart changes end-to-end without a real Honeycomb tenant. Tear
+down with `make kind-down`.
 
 ## Related docs
 

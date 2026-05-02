@@ -34,6 +34,7 @@ data:
       # profile.mode=k8s ships per-node hostmetrics + kubeletstats +
       # filelog/k8s and turns on the k8sattributes processor on every
       # pipeline. See internal/profiles/k8s/README.md for the receivers
-      # this enables; M5.C lands the matching ClusterRole and DaemonSet
-      # host bind mounts that hostmetrics + kubeletstats need.
+      # this enables; the matching ClusterRole, host bind mounts, and
+      # runAsRoot security context live in templates/clusterrole.yaml
+      # and templates/daemonset.yaml.
       mode: {{ .Values.conduit.profileMode | quote }}

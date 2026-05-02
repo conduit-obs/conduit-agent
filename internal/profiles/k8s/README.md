@@ -11,7 +11,7 @@ gateway).
 
 | Fragment | Receiver(s) | Pipeline | Notes |
 |---|---|---|---|
-| [`hostmetrics.yaml`](hostmetrics.yaml) | `hostmetrics` | metrics | Same scraper set as the Linux profile (CPU / memory / load / disk / filesystem / network / paging / processes), expecting the chart-provided host bind mounts that arrive in M5.C. Reports per-node stats keyed on `host.name`. |
+| [`hostmetrics.yaml`](hostmetrics.yaml) | `hostmetrics` | metrics | Same scraper set as the Linux profile (CPU / memory / load / disk / filesystem / network / paging / processes), with `root_path: /hostfs` so the scrapers read `/proc` and `/sys` from the chart-provided host bind mount instead of the pod's own filesystem. Reports per-node stats keyed on `host.name`. |
 | [`kubelet.yaml`](kubelet.yaml) | `kubeletstats` | metrics | Talks to the local kubelet on `:10250` using the pod's ServiceAccount. Scopes to the local node via `K8S_NODE_NAME` (set by the chart's DaemonSet from the downward API) so each Conduit pod scrapes only the kubelet on the same node. Emits per-node, per-pod, and per-container CPU + memory. |
 | [`logs.yaml`](logs.yaml) | `filelog/k8s` | logs | Tails `/var/log/pods/*/*/*.log` (the kubelet-managed path layout) with the upstream `container` operator that auto-detects CRI / containerd / Docker JSON formats. Excludes Conduit's own pods to avoid feedback loops. |
 
@@ -46,10 +46,10 @@ profiles — adding a fourth fragment kind would mean a new
 [`PROFILE_SPEC.md`](../PROFILE_SPEC.md) §1 ("Telemetry the profile MUST
 emit") for k8s:
 
-| Section | M5.B status |
+| Section | Status |
 |---|---|
 | Resource attributes | `host.name`, `os.type`, etc. provided by `resourcedetectionprocessor`; `k8s.namespace.name` / `k8s.pod.name` / `k8s.deployment.name` / labels added by `k8sattributes` on every signal; `k8s.container.name` / `k8s.pod.uid` extracted from the container-log filepath by the `container` operator. |
-| Host metrics | Per-node CPU / memory / load / disk / filesystem / network / paging / processes via `hostmetrics` (needs M5.C host mounts) plus per-pod CPU + memory via `kubeletstats` (works as soon as RBAC lands). |
+| Host metrics | Per-node CPU / memory / load / disk / filesystem / network / paging / processes via `hostmetrics` (re-rooted at `/hostfs` per the chart bind mount) plus per-pod CPU + memory via `kubeletstats`. |
 | Logs | Container logs from every pod on the node via `filelog/k8s`; system logs from the node itself stay deferred to M9 (the DaemonSet would need `/var/log/syslog` mounted in, and operators with structured node logging usually pipe it through OTLP already). |
 
 The dashboard quality bar (`PROFILE_SPEC.md` §3) applies once data
@@ -62,8 +62,9 @@ actually asks of a cluster) — not a copy of the host-overview skeleton.
 ## See also
 
 - [`deploy/helm/conduit-agent/`](../../../deploy/helm/conduit-agent/) —
-  the chart that runs this profile, owns the host bind mounts (M5.C),
-  and grants the ClusterRole RBAC kubeletstats + k8sattributes need.
+  the chart that runs this profile, owns the `/hostfs` and
+  `/var/log/{pods,containers}` host bind mounts, and grants the
+  read-only `ClusterRole` kubeletstats + k8sattributes need.
 - [`internal/expander/expander.go`](../../expander/expander.go)
   §`profileWantsK8sAttributes` for the rule that ties the processor to
   `profile.mode=k8s`.

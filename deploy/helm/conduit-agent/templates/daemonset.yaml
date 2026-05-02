@@ -48,6 +48,13 @@ spec:
       {{- end }}
       hostNetwork: {{ .Values.daemonset.hostNetwork }}
       dnsPolicy: {{ .Values.daemonset.dnsPolicy }}
+      {{- if .Values.daemonset.hostMounts.enabled }}
+      # hostPID lets the processes scraper see every PID on the node
+      # rather than just the conduit pod's PID namespace. Required when
+      # hostmetrics is enabled and the processes scraper is on (it is in
+      # the M5.B fragment); harmless when receivers are OTLP-only.
+      hostPID: true
+      {{- end }}
       {{- with .Values.daemonset.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -60,10 +67,6 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # securityContext is set on the container, not the pod, so the
-      # distroless nonroot UID baked into the image (per
-      # deploy/docker/Dockerfile) takes effect without forcing the kubelet
-      # to spawn a runtime-extra init.
       containers:
         - name: conduit
           image: {{ include "conduit-agent.image" . }}
@@ -110,6 +113,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if .Values.daemonset.hostMounts.enabled }}
+            # The hostmetrics filesystem scraper reads /proc/self/mountinfo
+            # to discover which filesystems exist on the node. With
+            # root_path: /hostfs the receiver retargets most paths under
+            # /hostfs automatically, but the *mountinfo* path is special-
+            # cased to honor HOST_PROC_MOUNTINFO so the scraper sees the
+            # node's mount table rather than the container's.
+            - name: HOST_PROC_MOUNTINFO
+              value: /hostfs/proc/self/mountinfo
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /
@@ -129,7 +142,24 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            {{- if .Values.daemonset.runAsRoot }}
+            # The hostmetrics processes scraper reads /proc/<pid> for every
+            # PID on the node and the filelog/k8s receiver reads
+            # /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log — both of
+            # which the kubelet exposes with mode 0600 / 0700 owned by
+            # root:root. Running as UID 0 is the standard k8s pattern for
+            # node-introspecting agents (matches the upstream
+            # otel-collector-contrib helm chart's hostMetrics preset).
+            # Operators who run profile.mode=none or profile.mode=docker
+            # should flip daemonset.runAsRoot=false for tighter pod
+            # security; the chart-default nonroot UID 65532 is baked into
+            # the image already.
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            {{- else }}
             runAsNonRoot: true
+            {{- end }}
             capabilities:
               drop:
                 - ALL
@@ -137,6 +167,28 @@ spec:
             - name: config
               mountPath: /etc/conduit
               readOnly: true
+            {{- if .Values.daemonset.hostMounts.enabled }}
+            # /hostfs gives hostmetrics the node's view of /proc, /sys, and
+            # the host filesystems (re-rooted via root_path: /hostfs in
+            # internal/profiles/k8s/hostmetrics.yaml). Read-only is
+            # sufficient — scrapers never write — and
+            # mountPropagation: HostToContainer keeps the view live as
+            # the kubelet adds and removes mounts on the node.
+            - name: hostfs
+              mountPath: /hostfs
+              readOnly: true
+              mountPropagation: HostToContainer
+            # /var/log/pods is the kubelet-managed location for container
+            # logs since 1.14. Files inside resolve as symlinks into
+            # /var/log/containers, so we mount both for the filelog
+            # receiver to read through the symlinks.
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlogcontainers
+              mountPath: /var/log/containers
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -144,3 +196,17 @@ spec:
             items:
               - key: conduit.yaml
                 path: conduit.yaml
+        {{- if .Values.daemonset.hostMounts.enabled }}
+        - name: hostfs
+          hostPath:
+            path: /
+            type: Directory
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: DirectoryOrCreate
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+            type: DirectoryOrCreate
+        {{- end }}

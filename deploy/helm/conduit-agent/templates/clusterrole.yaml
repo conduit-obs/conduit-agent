@@ -1,0 +1,50 @@
+{{- if .Values.rbac.create -}}
+{{- /*
+ClusterRole for the M5.B receivers and processor:
+
+  - kubeletstats: GETs the local node's kubelet endpoint via the
+    /api/v1/nodes/<name>/proxy/stats/summary path. Needs nodes/proxy
+    (the kubelet API surface) plus nodes/stats (the cAdvisor surface
+    older clusters expose).
+  - k8sattributes: lists+watches pods cluster-wide (filtered to the
+    local node by the receiver's filter.node_from_env_var) so it can
+    associate incoming signals with their source pod, plus
+    namespaces (for namespace labels / annotations) and the apps
+    APIs that own pods (ReplicaSet -> Deployment is the path the
+    processor walks via OwnerReferences). nodes is included so
+    k8sattributes can extract node labels / annotations onto each
+    signal.
+
+The list is intentionally narrow — no write verbs anywhere, and no
+Secret access. Operators auditing the chart should be able to read
+this list and match each rule to a receiver / processor in
+internal/profiles/k8s/.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - nodes/stats
+      - nodes/proxy
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - cronjobs
+      - jobs
+    verbs: ["get", "list", "watch"]
+{{- end -}}

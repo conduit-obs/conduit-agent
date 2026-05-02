@@ -344,6 +344,10 @@ func TestExpand_K8sProfile_LoadsFragments(t *testing.T) {
 	// The three k8s receivers are spliced into receivers:.
 	mustContain(t, out, []string{
 		`hostmetrics:`,
+		// root_path: /hostfs re-roots every hostmetrics scraper at the
+		// chart-provided host bind mount. Without this, hostmetrics
+		// reports the pod's view of /proc instead of the node's.
+		`root_path: /hostfs`,
 		`kubeletstats:`,
 		`endpoint: ${env:K8S_NODE_NAME}:10250`,
 		`auth_type: serviceAccount`,

@@ -23,10 +23,11 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M4.C** | Multi-arch (amd64 + arm64) image build wired in `.goreleaser.yaml` for `ghcr.io/conduit-obs/conduit-agent` | done (publishing CI workflow lands at M12) |
 | **M5.A** | `profile.mode: k8s` schema knob (binds OTLP to `0.0.0.0`); Helm chart skeleton at [`deploy/helm/conduit-agent/`](deploy/helm/conduit-agent/README.md): DaemonSet, ConfigMap, ServiceAccount, Service, optional Secret | done |
 | **M5.B** | `profile.mode: k8s` defaults: per-node `hostmetrics`, `kubeletstats` against the local kubelet, `filelog/k8s` for `/var/log/pods/*` (with the upstream `container` operator), and `k8sattributes` enrichment on every pipeline. See [`internal/profiles/k8s/`](internal/profiles/k8s/README.md). | done |
+| **M5.C** | Helm chart wiring for the M5.B receivers: read-only `ClusterRole` + `ClusterRoleBinding` (gated by `rbac.create`), DaemonSet host bind mounts (`/hostfs` with `HostToContainer` propagation, `/var/log/pods`, `/var/log/containers`) gated by `daemonset.hostMounts.enabled`, `runAsRoot` security context, plus `make kind-smoketest` to verify the chart end-to-end on a disposable kind cluster. | done |
 
 The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
 
-M5 ships in slices, mirroring the Linux / Docker pattern: M5.A is the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B (this milestone) wires the **kubelet / container-log / `k8sattributes` defaults** that make `profile.mode=k8s` actually Kubernetes-aware. M5.C lands the matching ClusterRole + DaemonSet host mounts so the new fragments stop hitting RBAC walls / empty `/proc`, M5.D ships OCI chart publishing, and M5.E ships the default cluster + workload boards. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
+M5 ships in slices, mirroring the Linux / Docker pattern: M5.A is the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wires the **kubelet / container-log / `k8sattributes` defaults**, M5.C (this milestone) wires **RBAC + host bind mounts** so those receivers actually have access to what they need, plus the kind smoke recipe to prove it. M5.D ships OCI chart publishing, M5.E ships the default cluster + workload boards. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
 You can run, against any conduit.yaml:
 
@@ -113,16 +114,19 @@ through the cluster Service. Each pod also exposes the `health_check`
 extension at `:13133` for liveness / readiness probes (the chart wires
 both probes against it automatically).
 
-M5.A + M5.B are landed: the DaemonSet ships per-node `hostmetrics`,
+M5.A through M5.C are landed: the DaemonSet ships per-node
+`hostmetrics` (rooted at `/hostfs` via the chart bind mount),
 `kubeletstats` against the local kubelet, `filelog/k8s` for
 `/var/log/pods/*`, and the `k8sattributes` processor on every pipeline
 so OTLP signals from instrumented apps in the cluster also pick up
-Kubernetes workload metadata. The chart's ClusterRole RBAC and
-DaemonSet host bind mounts that the new fragments need land in
-M5.C — until then `kubeletstats` will hit RBAC errors and
-`hostmetrics` will report the pod's view of `/proc` instead of the
-node's. OCI publishing of the chart lands in M5.D; the default cluster
-+ workload boards in M5.E.
+Kubernetes workload metadata. The chart provisions a read-only
+`ClusterRole` for those receivers (toggle with `rbac.create=false` if
+you manage RBAC out-of-band) and bind-mounts `/hostfs`, `/var/log/pods`,
+and `/var/log/containers` from the host (toggle with
+`daemonset.hostMounts.enabled=false` for an OTLP-only relay). Verify
+end-to-end on a disposable kind cluster with `make kind-smoketest`. OCI
+publishing of the chart lands in M5.D; the default cluster + workload
+boards in M5.E.
 
 For values reference, RBAC plan, and gateway egress, see
 [`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).

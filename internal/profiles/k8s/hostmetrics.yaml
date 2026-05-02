@@ -2,21 +2,25 @@
 #
 # Splices in under receivers: in the rendered upstream OTel YAML and feeds
 # the metrics pipeline alongside otlp + kubeletstats. The shape mirrors the
-# Linux profile (same scrapers, same *.utilization opt-ins) because a
-# DaemonSet pod's view of the node — once /proc, /sys, /var/run, and the
-# host root are bind-mounted in — is identical to a Linux host install's.
+# Linux profile (same scrapers, same *.utilization opt-ins) because once
+# the chart bind-mounts the host root at /hostfs and re-roots the
+# scrapers via root_path, a DaemonSet pod's view of the node is identical
+# to a Linux host install's.
 #
-# The Helm chart in deploy/helm/conduit-agent ships those bind mounts in
-# M5.C; until then the host-level scrapers in this fragment have nothing
-# useful to read and the kubelet receiver in kubelet.yaml carries the
-# pod / container metrics on its own.
+# root_path: /hostfs is the contract between this fragment and the chart.
+# Every scraper resolves /proc and /sys (and any path it walks for
+# filesystems) under root_path, so:
 #
-# What this gives operators:
-#   - Per-node CPU / memory / load / disk / filesystem / network /
-#     paging / processes scraped at 60s.
-#   - Each scraper's *.utilization metric (0..1 fraction) enabled
-#     so dashboards plot percent-used directly across heterogeneous
-#     node SKUs without dividing bytes by total in the query layer.
+#   - cpu / memory / load / paging read /hostfs/proc/{stat,meminfo,...}
+#   - disk reads /hostfs/proc/diskstats
+#   - filesystem reads /hostfs/proc/{self/mountinfo,mounts}
+#   - processes reads /hostfs/proc/<pid>/
+#   - network reads /hostfs/proc/net/dev
+#
+# Without the matching `hostfs` host bind mount in the DaemonSet (provided
+# by the chart's daemonset.hostMounts.enabled = true) the scrapers report
+# the pod's view of /proc rather than the node's, which is rarely useful;
+# operators who want OTLP-only on k8s should set profile.mode=none.
 #
 # Together with kubeletstats (per-pod / per-container) and
 # filelog/k8s (container logs), this fragment covers the per-node
@@ -25,6 +29,7 @@
 # ship in a future single-replica Deployment, not this DaemonSet.
 hostmetrics:
   collection_interval: 60s
+  root_path: /hostfs
   scrapers:
     cpu:
       metrics:

@@ -25,12 +25,11 @@ Output: customer-operated OTLP gateway at {{ .Values.gateway.endpoint }}.
 
 Profile mode: {{ .Values.conduit.profileMode }}.
 {{- if eq .Values.conduit.profileMode "k8s" }}
-The k8s profile ships per-node hostmetrics, kubeletstats against the
-local kubelet, filelog/k8s for /var/log/pods/*, and the k8sattributes
-processor enriching every pipeline. M5.C will land the matching
-ClusterRole + DaemonSet host bind mounts; until then expect RBAC errors
-from kubeletstats / k8sattributes and a pod-scoped (not node-scoped)
-view from hostmetrics.
+The k8s profile ships per-node hostmetrics (rooted at /hostfs via the
+chart bind mount), kubeletstats against the local kubelet, filelog/k8s
+for /var/log/pods/*, and the k8sattributes processor enriching every
+pipeline. The matching ClusterRole, host bind mounts, and runAsRoot
+security context are wired by the chart{{- if not .Values.rbac.create }} (rbac.create is currently false — bind {{ include "conduit-agent.serviceAccountName" . }} to an externally managed ClusterRole that grants the rules in templates/clusterrole.yaml){{- end }}{{- if not .Values.daemonset.hostMounts.enabled }} (daemonset.hostMounts.enabled is currently false — hostmetrics will report the pod's view of /proc instead of the node's){{- end }}.
 {{- end }}
 
 Send a test trace
@@ -54,5 +53,8 @@ Probe pod liveness:
 
 Next steps
 ----------
-- internal/profiles/k8s/README.md documents the kubelet + filelog +
-  k8sattributes defaults and the M5.C host-mount / RBAC dependencies.
+- internal/profiles/k8s/README.md documents the receiver shape; this
+  chart's README.md walks through the rbac.create and
+  daemonset.hostMounts.enabled / runAsRoot toggles.
+- Run `make kind-smoketest` from the repo root for an end-to-end
+  verification on a disposable kind cluster.
