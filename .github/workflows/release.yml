@@ -82,10 +82,16 @@ jobs:
       - name: Run goreleaser
         # The actual artifact set + signing is configured in
         # .goreleaser.yaml. This step just orchestrates.
+        # MSI is skipped here because the windows-msi job below is
+        # already gated on OQ-5 (`if: false`); building the MSI in
+        # this Linux job would also require msitools/wixl that we
+        # don't currently install. Re-enable the MSI step in
+        # goreleaser when OQ-5 lands and the windows-msi job is
+        # turned on.
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> 1.25"
-          args: release --clean
+          args: release --clean --skip=msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The snapshot path skips signing if the maintainer GPG
