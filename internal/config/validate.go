@@ -136,7 +136,7 @@ func (v *validator) validateProfile(p *Profile) {
 		return
 	}
 	switch p.Mode {
-	case ProfileModeAuto, ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeNone:
+	case ProfileModeAuto, ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeWindows, ProfileModeNone:
 		// known mode
 	default:
 		v.add("profile.mode", fmt.Sprintf(`unknown value %q; want one of "auto", "linux", "darwin", "docker", "k8s", or "none"`, string(p.Mode)))

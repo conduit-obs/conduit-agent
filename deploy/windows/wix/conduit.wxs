@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Conduit Agent MSI source (M6.C).
+
+  WiX 3.x source compiled by candle.exe + light.exe (Windows) or
+  msitools' wixl + wixl-heat (linux/macOS via goreleaser). The MSI
+  installs three things:
+
+    1. conduit.exe to %PROGRAMFILES%\Conduit\
+    2. The default config + env to %PROGRAMDATA%\Conduit\, with the
+       NeverOverwrite="yes" component attribute so an operator's
+       edits to conduit.yaml / conduit.env survive MSI upgrades.
+       (The unmodified .default copy is overwritten on upgrade so
+       diffing the live config against the new defaults is one cmp
+       command away.)
+    3. A Windows Service "conduit" registered against the SCM via
+       <ServiceInstall>, set to auto-start (DelayedAutoStart="yes"
+       so we don't slow boot) and started on install.
+
+  GUIDs:
+    UpgradeCode is the stable identity of the product across
+    versions — DO NOT change it without bumping the major version,
+    or the MSI installer will fail to detect prior installs and
+    operators will end up with two side-by-side Conduits.
+
+    Component GUIDs use the auto-generation form Guid="*", which
+    derives a stable per-component GUID from the component's
+    primary KeyPath (file or registry value). This is the WiX 3.5+
+    pattern that avoids hand-managed component GUID lists.
+
+  Authenticode signing is M12 territory — handled in the CI
+  workflow that runs after this .wxs is compiled, signing both the
+  inner conduit.exe (via osslsigncode or signtool.exe) and the
+  outer .msi. EV cert procurement is gated on OQ-5 in the
+  decision log.
+
+  Build:
+    candle conduit.wxs -dbinary=...\conduit.exe \
+                       -dyaml_default=...\conduit.yaml.default \
+                       -denv_default=...\conduit.env.default \
+                       -dVersion=0.0.1
+    light conduit.wixobj -ext WixUtilExtension -o conduit.msi
+
+  Goreleaser invokes the same flow with -d substitutions filled in
+  from the staged build artifact paths; see the msi: section in
+  .goreleaser.yaml.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="Conduit Agent"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Conduit Observability"
+           UpgradeCode="9C5B2B6F-7E8A-4C2D-B5E1-3F8D4C9E6A2B">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Conduit — OpenTelemetry Collector distribution (V0)"
+             Comments="https://github.com/conduit-obs/conduit-agent" />
+
+    <!--
+      MajorUpgrade rejects in-place downgrades and applies major
+      upgrades automatically (unless explicitly overridden by
+      installing the older MSI with REINSTALLMODE=amus).
+    -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Conduit Agent is already installed. Uninstall it first via Apps &amp; Features." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      Directory tree:
+        %PROGRAMFILES%\Conduit\           the binary lives here
+        %PROGRAMDATA%\Conduit\            config + env live here, world-readable
+                                          but operator-edited (NeverOverwrite)
+    -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Conduit" />
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="DATAFOLDER" Name="Conduit" />
+      </Directory>
+    </Directory>
+
+    <!--
+      Component: the Conduit binary + Windows Service registration.
+      ServiceInstall registers under the SCM as "conduit" with
+      auto-start; DelayedAutoStart="yes" avoids slowing boot.
+      ServiceControl starts on install and stops on uninstall.
+      Arguments: `run -c <DATAFOLDER>\conduit.yaml`.
+    -->
+    <Component Id="conduit_exe"
+               Directory="INSTALLFOLDER"
+               Guid="*">
+      <File Id="conduit.exe"
+            Name="conduit.exe"
+            Source="$(var.binary)"
+            KeyPath="yes" />
+
+      <ServiceInstall Id="conduit_service_install"
+                      Name="conduit"
+                      DisplayName="Conduit Agent"
+                      Description="OpenTelemetry Collector distribution by Conduit Observability"
+                      Type="ownProcess"
+                      Start="auto"
+                      ErrorControl="normal"
+                      Account="LocalSystem"
+                      Vital="yes"
+                      Arguments='run -c "[DATAFOLDER]conduit.yaml"'>
+        <util:ServiceConfig FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="none"
+                            ResetPeriodInDays="1"
+                            RestartServiceDelayInSeconds="60" />
+      </ServiceInstall>
+
+      <ServiceControl Id="conduit_service_control"
+                      Name="conduit"
+                      Start="install"
+                      Stop="both"
+                      Remove="uninstall"
+                      Wait="yes" />
+    </Component>
+
+    <!--
+      Default config and env reference copies, always overwritten
+      on upgrade so operators can diff their live config against
+      the new defaults.
+    -->
+    <Component Id="conduit_yaml_default"
+               Directory="DATAFOLDER"
+               Guid="*">
+      <File Id="conduit.yaml.default"
+            Name="conduit.yaml.default"
+            Source="$(var.yaml_default)"
+            KeyPath="yes" />
+    </Component>
+    <Component Id="conduit_env_default"
+               Directory="DATAFOLDER"
+               Guid="*">
+      <File Id="conduit.env.default"
+            Name="conduit.env.default"
+            Source="$(var.env_default)"
+            KeyPath="yes" />
+    </Component>
+
+    <!--
+      Live config and env. NeverOverwrite="yes" keeps operator
+      edits across upgrades; CompanionFile="" + Permanent="no"
+      ensure they're removed on uninstall (the .default companions
+      stay around for 'conduit doctor --reset' to consult).
+    -->
+    <Component Id="conduit_yaml"
+               Directory="DATAFOLDER"
+               Guid="*"
+               NeverOverwrite="yes">
+      <File Id="conduit.yaml"
+            Name="conduit.yaml"
+            Source="$(var.yaml_default)"
+            KeyPath="yes" />
+    </Component>
+    <Component Id="conduit_env"
+               Directory="DATAFOLDER"
+               Guid="*"
+               NeverOverwrite="yes">
+      <File Id="conduit.env"
+            Name="conduit.env"
+            Source="$(var.env_default)"
+            KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main"
+             Title="Conduit Agent"
+             Description="Conduit Agent and Windows Service registration."
+             Level="1"
+             Display="expand">
+      <ComponentRef Id="conduit_exe" />
+      <ComponentRef Id="conduit_yaml_default" />
+      <ComponentRef Id="conduit_env_default" />
+      <ComponentRef Id="conduit_yaml" />
+      <ComponentRef Id="conduit_env" />
+    </Feature>
+
+  </Product>
+</Wix>

@@ -1,0 +1,42 @@
+# Windows default system-logs profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the logs pipeline alongside otlp. Two receivers ship by default:
+#
+#   - windowseventlog/application reads the Windows "Application" channel
+#     where most third-party software writes its logs.
+#
+#   - windowseventlog/system reads the Windows "System" channel where the
+#     OS itself, drivers, and Windows services log boot, hardware, and
+#     service-control events.
+#
+# What's deliberately NOT loaded by default:
+#
+#   - The "Security" channel typically requires SeSecurityPrivilege
+#     (running as LocalSystem or a member of "Event Log Readers" with
+#     the right group policy). Operators who need it use the overrides:
+#     escape hatch (ADR-0012) to add a Security receiver and handle
+#     the privilege story in their MSI install.
+#
+#   - filelog for IIS / app-specific logs. Windows has no /var/log
+#     equivalent — application-specific filelog is highly site-specific
+#     (IIS at C:\inetpub\logs\LogFiles\, .NET apps under
+#     %PROGRAMDATA%\<vendor>\, ...) so V0 stays out of that mess.
+#     Operators add their paths under overrides:.
+#
+# start_at: end avoids replaying weeks of historical events into the
+# destination on first install. raw: false (the default) gives Conduit
+# the rendered XML body — operators who want the original wire-format
+# XML for forensic queries flip raw: true via overrides:.
+#
+# Channel name capitalization: the receiver accepts the lowercase
+# names ("application", "system") — those are also what Get-WinEvent
+# emits. The render-time YAML uses lowercase for consistency with
+# upstream documentation.
+windowseventlog/application:
+  channel: application
+  start_at: end
+
+windowseventlog/system:
+  channel: system
+  start_at: end

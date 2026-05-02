@@ -5,9 +5,9 @@
 #   - deb / rpm / archlinux packages via nfpms                (M3.B)
 #   - multi-arch (amd64 + arm64) OCI image at
 #     ghcr.io/conduit-obs/conduit-agent (per ADR-0019)        (M4.C)
+#   - Windows MSI via WiX (M6.C) — see deploy/windows/wix/conduit.wxs
 #
 # Still pending:
-#   - M6  : Windows MSI (WiX)
 #   - M12 : Signing (cosign / Authenticode / GPG / Helm provenance) and
 #           image SBOM attestations — gated on OQ-5 in the decision log.
 version: 2
@@ -197,15 +197,49 @@ docker_manifests:
       - "ghcr.io/conduit-obs/conduit-agent:latest-amd64"
       - "ghcr.io/conduit-obs/conduit-agent:latest-arm64"
 
-# Ship install_linux.sh and the systemd unit alongside the release archives
-# so curl-pipe-bash installs and config-management modules can grab them
-# directly from the GitHub release without unpacking a deb/rpm.
+# Windows MSI (M6.C). Produced by goreleaser's msi: support, which can run
+# either the WiX toolset (candle.exe + light.exe on Windows) or the
+# msitools port (wixl on linux/macOS). The MSI installs conduit.exe under
+# %PROGRAMFILES%\Conduit\ and the default config + env under
+# %PROGRAMDATA%\Conduit\, registers the Windows Service "conduit" via
+# the WiX <ServiceInstall> element, and applies the M6.C
+# config|noreplace semantic on conduit.yaml / conduit.env so MSI upgrades
+# preserve operator edits.
+#
+# WiX `-d` substitution variables in the .wxs:
+#   binary       absolute path to the conduit.exe staged by the build
+#   yaml_default deploy/windows/conduit.yaml.default
+#   env_default  deploy/windows/conduit.env.default
+#   Version      release version (no `v` prefix)
+#
+# Authenticode signing (signtool.exe / osslsigncode for both the inner
+# conduit.exe and the outer .msi) lands at M12 alongside cosign / GPG.
+# EV cert procurement is gated on OQ-5.
+msi:
+  - id: conduit
+    name: 'conduit-{{ .Version }}-{{ .Arch }}'
+    wxs: deploy/windows/wix/conduit.wxs
+    extra_files:
+      - deploy/windows/conduit.yaml.default
+      - deploy/windows/conduit.env.default
+    ids:
+      - conduit
+    replace: true
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+# Ship install_linux.sh, the systemd unit, and the Windows install /
+# uninstall scripts alongside the release archives so curl-pipe-bash and
+# Invoke-WebRequest installs (and config-management modules) can grab
+# them directly from the GitHub release without unpacking a deb / rpm /
+# msi.
 release:
   draft: true
   prerelease: auto
   extra_files:
     - glob: scripts/install_linux.sh
     - glob: deploy/linux/conduit.service
+    - glob: deploy/windows/scripts/install.ps1
+    - glob: deploy/windows/scripts/uninstall.ps1
 
 checksum:
   name_template: "checksums.txt"

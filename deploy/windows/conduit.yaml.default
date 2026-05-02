@@ -1,0 +1,41 @@
+# Conduit default configuration for Windows installs (M6.C).
+#
+# The MSI installs this file to %PROGRAMDATA%\Conduit\conduit.yaml on
+# first install only — a `config|noreplace` semantic via WiX's
+# `KeyPath="yes" NeverOverwrite="yes"` attribute on the component, so
+# subsequent upgrades preserve operator edits. The unmodified default
+# stays at %PROGRAMDATA%\Conduit\conduit.yaml.default for diffing.
+#
+# Required environment variables (set in %PROGRAMDATA%\Conduit\conduit.env
+# or via the Service Control Manager's environment for the conduit
+# service; install.ps1 writes a starter file with placeholders):
+#
+#   HONEYCOMB_API_KEY                Honeycomb ingest key (x-honeycomb-team).
+#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
+#                                    Typical values: a host role like
+#                                    "edge-gateway" or "checkout-api".
+#   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g. "production",
+#                                    "staging"). Defaults to "production"
+#                                    in the shipped conduit.env.
+#
+# The default profile is "auto", which on Windows loads:
+#   - hostmetrics             (cpu, memory, load=Processor Queue Length,
+#                              disk, filesystem, network, paging, processes;
+#                              see internal/profiles/windows/hostmetrics.yaml)
+#   - windowseventlog/application
+#   - windowseventlog/system
+#
+# Security Event Log is intentionally not loaded (requires
+# SeSecurityPrivilege; see internal/profiles/windows/README.md).
+#
+# To run OTLP-only (no host metrics, no Event Log scraping) set:
+#   profile:
+#     mode: none
+
+service_name: ${env:CONDUIT_SERVICE_NAME}
+deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
+
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

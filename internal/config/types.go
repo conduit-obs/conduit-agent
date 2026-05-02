@@ -93,12 +93,13 @@ type AgentConfig struct {
 type ProfileMode string
 
 const (
-	ProfileModeAuto   ProfileMode = "auto"
-	ProfileModeLinux  ProfileMode = "linux"
-	ProfileModeDarwin ProfileMode = "darwin"
-	ProfileModeDocker ProfileMode = "docker"
-	ProfileModeK8s    ProfileMode = "k8s"
-	ProfileModeNone   ProfileMode = "none"
+	ProfileModeAuto    ProfileMode = "auto"
+	ProfileModeLinux   ProfileMode = "linux"
+	ProfileModeDarwin  ProfileMode = "darwin"
+	ProfileModeDocker  ProfileMode = "docker"
+	ProfileModeK8s     ProfileMode = "k8s"
+	ProfileModeWindows ProfileMode = "windows"
+	ProfileModeNone    ProfileMode = "none"
 )
 
 // Profile turns the platform default fragments (host metrics, system log

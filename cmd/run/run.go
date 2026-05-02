@@ -1,13 +1,27 @@
 // Package run implements `conduit run`, which boots the embedded OpenTelemetry
 // Collector with the pipeline expanded from conduit.yaml.
+//
+// Lifecycle dispatch is split across two build-tagged files:
+//
+//   - run_unix.go (build !windows): SIGINT / SIGTERM cancel a context
+//     derived from cobra's, then call into the collector. The Linux
+//     systemd unit and the macOS launchd plist both feed into this path.
+//
+//   - run_windows.go (build windows): if the process was started by the
+//     Windows Service Control Manager (svc.IsWindowsService), dispatch
+//     to the SCM via svc.Run and translate its Stop / Shutdown commands
+//     into a context cancellation; if started interactively (a developer
+//     in a console), fall back to Ctrl+C handling. The MSI installer
+//     (M6.C) registers `conduit run` as the service ImagePath, so a
+//     Windows Service start lands here.
+//
+// runCollector is the OS-agnostic core that both wrappers call.
 package run
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +29,13 @@ import (
 	"github.com/conduit-obs/conduit-agent/internal/config"
 	"github.com/conduit-obs/conduit-agent/internal/expander"
 )
+
+// serviceName is the Windows Service Control Manager name the MSI
+// registers under (deploy/windows/wix/conduit.wxs §ServiceInstall.Name).
+// Reused as the OS-agnostic identifier for log lines emitted from the
+// service-lifecycle layer (run_unix.go ignores it; run_windows.go passes
+// it to svc.Run).
+const serviceName = "conduit"
 
 const long = `Run the Conduit agent with the embedded OpenTelemetry Collector.
 
@@ -74,11 +95,10 @@ func runCmd(cmd *cobra.Command, _ []string) error {
 	settings := collector.DefaultSettings(collector.DefaultBuildInfo)
 	settings.ConfigProviderSettings.ResolverSettings.URIs = uris
 
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	if err := collector.Run(ctx, settings); err != nil {
-		return fmt.Errorf("run: collector exited: %w", err)
-	}
-	return nil
+	return runWithLifecycle(cmd.Context(), serviceName, func(ctx context.Context) error {
+		if err := collector.Run(ctx, settings); err != nil {
+			return fmt.Errorf("run: collector exited: %w", err)
+		}
+		return nil
+	})
 }

@@ -8,7 +8,7 @@ import (
 
 func TestAvailable_HasShippedPlatforms(t *testing.T) {
 	got := Available()
-	want := map[string]bool{"linux": true, "darwin": true, "docker": true, "k8s": true}
+	want := map[string]bool{"linux": true, "darwin": true, "docker": true, "k8s": true, "windows": true}
 	if len(got) < len(want) {
 		t.Fatalf("Available: got %v, want at least %v", got, keys(want))
 	}
@@ -53,6 +53,12 @@ func TestHas(t *testing.T) {
 		{"docker", SignalHostMetrics, true},
 		{"docker", SignalSystemLogs, false},
 		{"docker", SignalKubelet, false},
+		// windows (M6.A) ships hostmetrics + system-logs (Application +
+		// System Event Log channels). Like every host platform, no
+		// kubelet fragment.
+		{"windows", SignalHostMetrics, true},
+		{"windows", SignalSystemLogs, true},
+		{"windows", SignalKubelet, false},
 		{"plan9", SignalHostMetrics, false},
 	}
 	for _, tc := range cases {
@@ -82,6 +88,17 @@ func TestLoad_ContentSanity(t *testing.T) {
 		// keyed on `system.*` columns work identically across host /
 		// container / k8s. Docker has no logs.yaml in V0.
 		{"docker", SignalHostMetrics, []string{"hostmetrics:", "root_path: /hostfs", "scrapers:", "system.cpu.utilization", "processes:"}},
+		// windows (M6.A) ships hostmetrics with the same scrapers
+		// + utilization opt-ins as the linux fragment so dashboards
+		// keyed on `system.*` work cross-platform; the load scraper
+		// emits `system.cpu.load_average.1m` (only) on Windows by
+		// reading the Processor Queue Length perf counter.
+		{"windows", SignalHostMetrics, []string{"hostmetrics:", "scrapers:", "system.cpu.utilization", "system.memory.utilization", "system.filesystem.utilization", "system.paging.utilization"}},
+		// windows logs profile loads the Application + System Event
+		// Log channels by default. Security is intentionally
+		// excluded (requires SeSecurityPrivilege) and is reachable
+		// through the overrides: escape hatch.
+		{"windows", SignalSystemLogs, []string{"windowseventlog/application:", "windowseventlog/system:", "channel: application", "channel: system", "start_at: end"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.platform+"/"+string(tc.signal), func(t *testing.T) {
@@ -143,11 +160,11 @@ func TestLoad_UnknownSignal(t *testing.T) {
 func TestDetectPlatform_RuntimeGOOS(t *testing.T) {
 	got := DetectPlatform()
 	switch got {
-	case "linux", "darwin":
+	case "linux", "darwin", "windows":
 		// expected on the platforms Conduit currently supports
 	case "":
 		// allowed: the test is running on a GOOS we don't have a fragment for
 	default:
-		t.Errorf("DetectPlatform: got %q; expected linux, darwin, or empty", got)
+		t.Errorf("DetectPlatform: got %q; expected linux, darwin, windows, or empty", got)
 	}
 }

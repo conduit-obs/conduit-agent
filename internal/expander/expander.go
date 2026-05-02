@@ -413,6 +413,12 @@ func resolveOTLPBindAddress(p *config.Profile) string {
 // k8s loads three fragments (hostmetrics + kubelet + logs) — the Helm
 // chart in deploy/helm/conduit-agent provides the matching DaemonSet
 // host mounts and ClusterRole RBAC in M5.C.
+//
+// windows (M6.A) loads hostmetrics + Windows Event Log (Application +
+// System channels). The agent runs as a Windows Service, so OTLP stays
+// on 127.0.0.1 by default — peer apps on the same host reach the
+// agent through the loopback, and ingress from other hosts is the
+// operator's deliberate firewall + bind-address override.
 func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 	if p == nil {
 		return ""
@@ -420,7 +426,7 @@ func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 	switch p.Mode {
 	case config.ProfileModeNone:
 		return ""
-	case config.ProfileModeLinux, config.ProfileModeDarwin, config.ProfileModeDocker, config.ProfileModeK8s:
+	case config.ProfileModeLinux, config.ProfileModeDarwin, config.ProfileModeDocker, config.ProfileModeK8s, config.ProfileModeWindows:
 		return string(p.Mode)
 	case config.ProfileModeAuto, "":
 		detected := profiles.DetectPlatform()

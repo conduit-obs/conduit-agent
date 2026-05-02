@@ -1,0 +1,60 @@
+# Windows default host-metrics profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the metrics pipeline alongside otlp. Same shape as the linux / darwin
+# fragments — same scrapers, same *.utilization opt-ins, 60s collection
+# interval — so dashboards keyed off the cross-platform `system.*`
+# vocabulary in PROFILE_SPEC §1 work identically across platforms.
+#
+# What's different from Linux on Windows:
+#
+#   - The `load` scraper on Windows reads the Performance Counter
+#     "System\Processor Queue Length" and reports it as
+#     system.cpu.load_average.1m (only — there is no 5m / 15m
+#     equivalent on Windows). Sustained queue length above
+#     core-count is the Windows analogue of high Unix load average.
+#     The windows-host-overview board surfaces it as the saturation
+#     indicator.
+#
+#   - The `paging` scraper measures the Windows page file rather
+#     than swap; the metric name is the same (system.paging.*) so
+#     dashboards plotting paging pressure work cross-platform.
+#
+#   - The `filesystem` scraper enumerates Windows volumes
+#     (C:\, D:\, ...). The dashboard filters down to fixed disks
+#     (DRIVETYPE=3) so virtual / removable media don't clutter the
+#     chart; the underlying receiver emits all of them so operators
+#     can tighten the filter to suit.
+#
+#   - The `processes` scraper reports system.processes.count and
+#     system.processes.created from Performance Counter data; per-
+#     process metrics are off by default on every platform (the
+#     `process` scraper, which is separate from `processes`, is
+#     not enabled here).
+#
+# No bind-mount contract on Windows because the agent runs as a
+# Windows Service in the host's process tree; there is no container
+# namespace to escape from.
+hostmetrics:
+  collection_interval: 60s
+  scrapers:
+    cpu:
+      metrics:
+        system.cpu.utilization:
+          enabled: true
+    memory:
+      metrics:
+        system.memory.utilization:
+          enabled: true
+    load:
+    disk:
+    filesystem:
+      metrics:
+        system.filesystem.utilization:
+          enabled: true
+    network:
+    paging:
+      metrics:
+        system.paging.utilization:
+          enabled: true
+    processes:

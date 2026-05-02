@@ -675,6 +675,73 @@ func TestExpand_DockerProfile_HostMetricsDisabled(t *testing.T) {
 	}
 }
 
+// Windows (M6.A) ships hostmetrics + Windows Event Log (Application +
+// System channels). Hostmetrics has the same shape as the linux fragment
+// — same scrapers, same *.utilization opt-ins — so dashboards keyed on
+// `system.*` work cross-platform; the Windows-specific load behaviour
+// (Processor Queue Length surfaced as system.cpu.load_average.1m) is
+// the receiver's responsibility, not the fragment's. The Security
+// Event Log channel is intentionally NOT loaded by default
+// (SeSecurityPrivilege / Event Log Readers membership required); it
+// stays reachable through the overrides: escape hatch.
+func TestExpand_WindowsProfile_LoadsHostMetricsAndEventLog(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeWindows}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`hostmetrics:`,
+		`system.cpu.utilization:`,
+		`system.memory.utilization:`,
+		`system.filesystem.utilization:`,
+		`system.paging.utilization:`,
+		`windowseventlog/application:`,
+		`windowseventlog/system:`,
+		`channel: application`,
+		`channel: system`,
+		`start_at: end`,
+	})
+	// Linux / k8s / docker fragments must NOT appear.
+	mustNotContain(t, out, []string{
+		`filelog/system:`,
+		`journald:`,
+		`kubeletstats:`,
+		`filelog/k8s:`,
+		`k8sattributes:`,
+		`root_path: /hostfs`,
+		`windowseventlog/security:`,
+	})
+	// Pipeline wiring: hostmetrics + otlp + span_metrics on metrics;
+	// both Event Log receivers + otlp on logs; traces stays otlp-only.
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "hostmetrics", "span_metrics"}) {
+		t.Errorf("metrics pipeline under windows profile = %v; want [otlp hostmetrics span_metrics]", got)
+	}
+	if got := pipelineReceivers(t, out, "logs"); !equalSet(got, []string{"otlp", "windowseventlog/application", "windowseventlog/system"}) {
+		t.Errorf("logs pipeline under windows profile = %v; want [otlp windowseventlog/application windowseventlog/system]", got)
+	}
+	if got := pipelineReceivers(t, out, "traces"); !equalSet(got, []string{"otlp"}) {
+		t.Errorf("traces pipeline under windows profile = %v; want [otlp]", got)
+	}
+}
+
+// system_logs: false on Windows is the opt-out for operators who only
+// want host metrics — the Event Log channels then drop out cleanly
+// without taking hostmetrics with them. Mirrors the same toggle on
+// linux / darwin.
+func TestExpand_WindowsProfile_SystemLogsDisabled(t *testing.T) {
+	disabled := false
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeWindows, SystemLogs: &disabled})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{`hostmetrics:`})
+	mustNotContain(t, out, []string{`windowseventlog/application:`, `windowseventlog/system:`})
+	if got := pipelineReceivers(t, out, "logs"); !equalSet(got, []string{"otlp"}) {
+		t.Errorf("logs pipeline under windows + system_logs=false = %v; want [otlp]", got)
+	}
+}
+
 // k8s ships three fragments (hostmetrics + kubeletstats + filelog/k8s)
 // and the k8sattributes processor — the per-node DaemonSet half of the
 // Kubernetes story. The chart in deploy/helm/conduit-agent provides
