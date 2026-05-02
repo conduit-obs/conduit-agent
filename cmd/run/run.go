@@ -56,13 +56,21 @@ func runCmd(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	yaml, err := expander.ExpandWithWarnings(cfg, cmd.ErrOrStderr())
+	configs, err := expander.ExpandConfigsWithWarnings(cfg, cmd.ErrOrStderr())
 	if err != nil {
 		return fmt.Errorf("run: expand: %w", err)
 	}
 
+	// One URI per rendered config source — the embedded collector
+	// deep-merges them in order. With no overrides, this is a single
+	// "yaml:..." URI; with overrides, the second URI carries the user's
+	// raw escape-hatch block (see ADR-0012 / config.AgentConfig.Overrides).
+	uris := make([]string, len(configs))
+	for i, body := range configs {
+		uris[i] = "yaml:" + body
+	}
 	settings := collector.DefaultSettings(collector.DefaultBuildInfo)
-	settings.ConfigProviderSettings.ResolverSettings.URIs = []string{"yaml:" + yaml}
+	settings.ConfigProviderSettings.ResolverSettings.URIs = uris
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

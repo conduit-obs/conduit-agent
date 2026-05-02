@@ -353,6 +353,67 @@ mystery_field: oops
 	}
 }
 
+func TestParse_OverridesPassThrough(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+overrides:
+  receivers:
+    kubeletstats:
+      collection_interval: 15s
+  service:
+    pipelines:
+      logs:
+        processors: [memory_limiter, resourcedetection, k8sattributes, resource, transform/logs, batch]
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(cfg.Overrides) == 0 {
+		t.Fatal("Overrides: should be populated")
+	}
+	receivers, ok := cfg.Overrides["receivers"].(map[string]any)
+	if !ok {
+		t.Fatalf("Overrides.receivers: not a map; got %T", cfg.Overrides["receivers"])
+	}
+	kubelet, ok := receivers["kubeletstats"].(map[string]any)
+	if !ok {
+		t.Fatalf("Overrides.receivers.kubeletstats: not a map; got %T", receivers["kubeletstats"])
+	}
+	if got := kubelet["collection_interval"]; got != "15s" {
+		t.Errorf("collection_interval: got %v, want 15s", got)
+	}
+}
+
+func TestParse_OverridesUnknownTopLevelKey(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+overrides:
+  reciever:  # typo
+    foo: {}
+`
+	_, err := Parse(strings.NewReader(yaml))
+	if err == nil {
+		t.Fatal("Parse: want validation error for typo in overrides top-level key")
+	}
+	if !strings.Contains(err.Error(), "overrides.reciever") {
+		t.Errorf("error should mention the bad path; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ADR-0012") {
+		t.Errorf("error should point at ADR-0012 for context; got: %v", err)
+	}
+}
+
 func TestValidationError_Format(t *testing.T) {
 	err := &ValidationError{
 		Issues: []FieldIssue{

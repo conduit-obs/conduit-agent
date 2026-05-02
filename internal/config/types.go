@@ -31,6 +31,42 @@ type AgentConfig struct {
 	// system_logs: true}. Set to {mode: none} to disable all platform
 	// defaults and run OTLP-only (the M2 behavior).
 	Profile *Profile `yaml:"profile,omitempty"`
+
+	// Overrides is the documented escape hatch for advanced users who need
+	// to reach upstream OTel Collector knobs Conduit has not surfaced as
+	// first-class fields. Any key under here is spliced verbatim into the
+	// rendered Collector configuration as a second config source — the
+	// embedded Collector deep-merges base + overrides at startup, with
+	// overrides winning where they overlap (and lists replacing rather
+	// than concatenating, matching upstream multi-config merge semantics).
+	//
+	// Heavy reliance on this field signals the schema is missing a
+	// first-class knob; field engineers and PMs review patterns at retro
+	// time and decide whether to promote them to typed fields. See
+	// docs/adr/adr-0012.md for the design and review cadence; conduit
+	// doctor's CDT0xxx checks (M11) warn when overrides is non-empty.
+	//
+	// Example — bumping kubeletstats collection interval:
+	//
+	//   overrides:
+	//     receivers:
+	//       kubeletstats:
+	//         collection_interval: 15s
+	//
+	// Example — adding the redactionprocessor to the logs pipeline (note
+	// that lists replace, so you must restate the full pipeline order):
+	//
+	//   overrides:
+	//     processors:
+	//       redaction:
+	//         allow_all_keys: true
+	//         blocked_values: ['(?i)password=\\S+']
+	//     service:
+	//       pipelines:
+	//         logs:
+	//           processors: [memory_limiter, resourcedetection, k8sattributes,
+	//                        resource, transform/logs, redaction, batch]
+	Overrides map[string]any `yaml:"overrides,omitempty"`
 }
 
 // ProfileMode discriminates which platform fragment set is loaded.

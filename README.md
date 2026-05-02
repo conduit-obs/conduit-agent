@@ -213,6 +213,39 @@ The OTLP receivers listen on `127.0.0.1:4317` / `:4318` for every host-mode prof
 
 This is enforced in the rendered config: `internal/expander/expander.go` derives the bind address from `profile.mode` directly — there's no separate bind-address knob to forget to set.
 
+### `overrides:` escape hatch
+
+`conduit.yaml` is intentionally narrow — every field has been weighed against the schema-creep risk that turns vendor distributions into thinly-disguised OTel YAML. When you genuinely need to reach an upstream OTel Collector knob Conduit hasn't surfaced (a non-default scraper interval, a third-party processor like `redaction`, an extra exporter, a tweak to a pipeline's processor list), drop into the top-level `overrides:` block:
+
+```yaml
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}
+
+overrides:
+  receivers:
+    kubeletstats:
+      collection_interval: 15s          # bump from the 60s default
+  processors:
+    redaction:
+      allow_all_keys: true
+      blocked_values: ['(?i)password=\S+']
+  service:
+    pipelines:
+      logs:
+        # Lists replace wholesale (collector multi-config merge semantics),
+        # so restate the full pipeline order to splice your processor in.
+        processors: [memory_limiter, resourcedetection, k8sattributes,
+                     resource, transform/logs, redaction, batch]
+```
+
+How it works mechanically: the expander emits the user's `overrides:` block as a *second* `yaml:` config source to the embedded Collector — the Collector's standard multi-config resolver deep-merges them at startup (maps merge by key, lists replace wholesale). Conduit doesn't ship its own deep-merge code; the merge semantics are exactly what `otelcol --config base.yaml --config overrides.yaml` would do. `conduit preview` shows the two documents separated by `---` so you can see what's layering on top of what.
+
+Top-level keys outside the standard collector vocab (`receivers` / `processors` / `exporters` / `connectors` / `extensions` / `service`) are validation errors at load time, so a typo doesn't silently no-op. See [ADR-0012](docs/adr/adr-0012.md) for the design rationale and the review cadence — heavy override patterns are signal that the schema is missing a first-class field, not a normal use case.
+
 ## Default dashboards
 
 The Honeycomb boards Conduit ships out of the box live as checked-in JSON under [`dashboards/`](dashboards/):

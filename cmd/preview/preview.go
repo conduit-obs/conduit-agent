@@ -58,11 +58,33 @@ func run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	yaml, err := expander.ExpandWithWarnings(cfg, cmd.ErrOrStderr())
+	configs, err := expander.ExpandConfigsWithWarnings(cfg, cmd.ErrOrStderr())
 	if err != nil {
 		return fmt.Errorf("preview: %w", err)
 	}
 
-	_, err = fmt.Fprint(cmd.OutOrStdout(), yaml)
-	return err
+	// Single config source: print it as one document (preserves the M2.B
+	// behavior — diff-friendly, drop-in to a manual `otelcol --config`).
+	out := cmd.OutOrStdout()
+	if len(configs) == 1 {
+		_, err = fmt.Fprint(out, configs[0])
+		return err
+	}
+	// Multi-source: separate the base from each overrides document with
+	// "---\n# overrides (merged at runtime by the embedded collector)\n"
+	// so the operator can see exactly what is layering on top of what.
+	// The collector itself reads these as separate config URIs and
+	// deep-merges; the separator here is purely for human inspection.
+	if _, err = fmt.Fprint(out, configs[0]); err != nil {
+		return err
+	}
+	for _, body := range configs[1:] {
+		if _, err = fmt.Fprint(out, "---\n# overrides (merged at runtime by the embedded collector; see ADR-0012)\n"); err != nil {
+			return err
+		}
+		if _, err = fmt.Fprint(out, body); err != nil {
+			return err
+		}
+	}
+	return nil
 }

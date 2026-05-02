@@ -30,6 +30,8 @@ import (
 	"strings"
 	"text/template"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/conduit-obs/conduit-agent/internal/config"
 	"github.com/conduit-obs/conduit-agent/internal/profiles"
 )
@@ -91,7 +93,12 @@ type templateView struct {
 	LogProcessors    []string
 }
 
-// Expand renders cfg into a single upstream OTel Collector YAML document.
+// Expand renders the BASE upstream OTel Collector YAML for cfg — the
+// always-on receivers / processors / exporters plus active platform
+// fragments. It does NOT include cfg.Overrides; callers handing the
+// result to the embedded collector should use ExpandConfigs instead so
+// the user's overrides participate in the merge.
+//
 // cfg is expected to be already validated (Load/Parse handles that).
 //
 // Profile resolution side effects: when profile.mode is "auto" and the
@@ -108,6 +115,58 @@ func Expand(cfg *config.AgentConfig) (string, error) {
 // io.Discard.
 func ExpandWithWarnings(cfg *config.AgentConfig, warnW io.Writer) (string, error) {
 	return expandTo(cfg, warnW)
+}
+
+// ExpandConfigs returns the slice of YAML config sources the embedded
+// OTel Collector should resolve in order. For configs without
+// cfg.Overrides set the slice has one element (the base render). With
+// overrides, the second element is the user's overrides block, which the
+// collector deep-merges over the first per its standard multi-config
+// resolver semantics: maps merge by key (overrides win where both set
+// the same key), lists replace wholesale.
+//
+// See docs/adr/adr-0012.md for the design rationale and review cadence
+// for the overrides escape hatch.
+func ExpandConfigs(cfg *config.AgentConfig) ([]string, error) {
+	return ExpandConfigsWithWarnings(cfg, nil)
+}
+
+// ExpandConfigsWithWarnings is the warn-writer variant of ExpandConfigs.
+// Used by cmd/run and cmd/preview so profile-resolution warnings reach
+// stderr while the rendered configs go through the regular result path.
+func ExpandConfigsWithWarnings(cfg *config.AgentConfig, warnW io.Writer) ([]string, error) {
+	base, err := expandTo(cfg, warnW)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || len(cfg.Overrides) == 0 {
+		return []string{base}, nil
+	}
+	overridesYAML, err := marshalOverrides(cfg.Overrides)
+	if err != nil {
+		return nil, fmt.Errorf("expand: marshal overrides: %w", err)
+	}
+	return []string{base, overridesYAML}, nil
+}
+
+// marshalOverrides serializes the user's overrides map to YAML with a
+// stable, two-space indent that matches the rest of the rendered config.
+// We use yaml.v3 (already a go.mod dep via internal/config) rather than
+// the encoding/json -> any -> yaml.Marshal route because yaml.v3
+// preserves list ordering — critical for service.pipelines.<signal>.processors
+// where order is semantic.
+func marshalOverrides(overrides map[string]any) (string, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(overrides); err != nil {
+		_ = enc.Close()
+		return "", err
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 func expandTo(cfg *config.AgentConfig, warnW io.Writer) (string, error) {

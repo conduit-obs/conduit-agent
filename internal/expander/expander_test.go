@@ -25,6 +25,97 @@ func honeycomb(p *config.Profile) *config.AgentConfig {
 	}
 }
 
+// TestExpandConfigs_NoOverrides asserts the single-source behavior:
+// without cfg.Overrides, ExpandConfigs returns one element and that
+// element matches what plain Expand would have produced. This is the
+// invariant cmd/run depends on for the "stock conduit.yaml" path.
+func TestExpandConfigs_NoOverrides(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	configs, err := ExpandConfigs(cfg)
+	if err != nil {
+		t.Fatalf("ExpandConfigs: %v", err)
+	}
+	if len(configs) != 1 {
+		t.Fatalf("ExpandConfigs without overrides should produce 1 config source, got %d", len(configs))
+	}
+	want, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if configs[0] != want {
+		t.Errorf("ExpandConfigs[0] should equal Expand output; got divergence")
+	}
+}
+
+// TestExpandConfigs_WithOverrides locks in the multi-source behavior
+// from ADR-0012: when cfg.Overrides is set, ExpandConfigs returns
+// (base, overrides) so the embedded collector can deep-merge them at
+// startup. The base must NOT have the overrides spliced into it
+// (collector merges, we don't), and the overrides document must be
+// valid YAML carrying the user's literal map.
+func TestExpandConfigs_WithOverrides(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	cfg.Overrides = map[string]any{
+		"receivers": map[string]any{
+			"kubeletstats": map[string]any{
+				"collection_interval": "15s",
+			},
+		},
+		"service": map[string]any{
+			"pipelines": map[string]any{
+				"logs": map[string]any{
+					"processors": []any{
+						"memory_limiter",
+						"resourcedetection",
+						"k8sattributes",
+						"resource",
+						"transform/logs",
+						"batch",
+					},
+				},
+			},
+		},
+	}
+	configs, err := ExpandConfigs(cfg)
+	if err != nil {
+		t.Fatalf("ExpandConfigs: %v", err)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("ExpandConfigs with overrides should produce 2 config sources, got %d", len(configs))
+	}
+	base, overrides := configs[0], configs[1]
+
+	// The base render must remain pristine — overrides do not leak
+	// into it because the collector does the merging at startup.
+	if strings.Contains(base, "collection_interval: 15s") {
+		t.Errorf("base render should not contain the override value; expander merged where it should not have")
+	}
+
+	// The overrides document must round-trip the user's map.
+	mustContain(t, overrides, []string{
+		`receivers:`,
+		`kubeletstats:`,
+		`collection_interval: 15s`,
+		`service:`,
+		`pipelines:`,
+		`logs:`,
+		// Pipeline list ordering is semantic for the collector; the
+		// yaml.v3 encoder preserves it (the user wrote the slice in
+		// this order).
+		`- memory_limiter`,
+		`- transform/logs`,
+		`- batch`,
+	})
+}
+
+// TestExpandConfigs_NilCfg keeps ExpandConfigs honest about its
+// argument-validation contract — same posture as Expand.
+func TestExpandConfigs_NilCfg(t *testing.T) {
+	if _, err := ExpandConfigs(nil); err == nil {
+		t.Error("ExpandConfigs(nil) should error")
+	}
+}
+
 func TestExpand_NoProfile_OTLPOnly(t *testing.T) {
 	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
 	out, err := Expand(cfg)

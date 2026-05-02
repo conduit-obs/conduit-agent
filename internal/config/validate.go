@@ -57,6 +57,7 @@ func (c *AgentConfig) Validate() error {
 
 	v.validateOutput(&c.Output)
 	v.validateProfile(c.Profile)
+	v.validateOverrides(c.Overrides)
 
 	if len(v.issues) == 0 {
 		return nil
@@ -117,6 +118,37 @@ func (v *validator) validateProfile(p *Profile) {
 		// known mode
 	default:
 		v.add("profile.mode", fmt.Sprintf(`unknown value %q; want one of "auto", "linux", "darwin", "docker", "k8s", or "none"`, string(p.Mode)))
+	}
+}
+
+// validateOverrides checks the structural shape of the overrides block
+// without trying to validate the contents — those are upstream OTel
+// Collector concerns and the collector's own resolver / config-unmarshaler
+// will reject anything malformed at startup with a clearer message than
+// we could produce here.
+//
+// What we DO catch: top-level keys outside the standard collector vocab
+// (receivers / processors / exporters / connectors / extensions /
+// service). Anything else is almost certainly a typo at the
+// conduit.yaml level, not a deliberate collector escape hatch — call it
+// out before the operator wonders why their override silently doesn't
+// apply.
+func (v *validator) validateOverrides(overrides map[string]any) {
+	if len(overrides) == 0 {
+		return
+	}
+	allowed := map[string]bool{
+		"receivers":  true,
+		"processors": true,
+		"exporters":  true,
+		"connectors": true,
+		"extensions": true,
+		"service":    true,
+	}
+	for key := range overrides {
+		if !allowed[key] {
+			v.add("overrides."+key, fmt.Sprintf(`unknown top-level key %q; expected one of receivers / processors / exporters / connectors / extensions / service. See ADR-0012 (docs/adr/adr-0012.md) for the overrides escape-hatch design.`, key))
+		}
 	}
 }
 
