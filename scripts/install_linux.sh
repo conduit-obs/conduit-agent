@@ -125,7 +125,40 @@ echo "==> installing ${ASSET} via ${INSTALL_CMD%% *}"
 # shellcheck disable=SC2086
 $INSTALL_CMD "${TMP}/${ASSET}"
 
-# ---- seed env file if requested -------------------------------------------
+# ---- collect required env --------------------------------------------------
+#
+# Conduit needs HONEYCOMB_API_KEY + CONDUIT_SERVICE_NAME before the
+# service can start. Three ways to supply them, in order of preference:
+#
+#   1. --api-key / --service-name flags        (CI-friendly, scripted installs)
+#   2. interactive prompts                     (sudo ./install_linux.sh on a TTY)
+#   3. operator hand-edits /etc/conduit/conduit.env after the fact
+#
+# Path 3 is what postinstall.sh already documents in the package's own
+# message; the install script's job is to make 1 + 2 ergonomic and to
+# refuse to enable+start a service that's guaranteed to crash-loop.
+
+if [ -t 0 ] && [ -t 1 ]; then
+    if [ -z "$API_KEY" ]; then
+        printf '\nConduit needs a Honeycomb ingest key to export.\n'
+        printf 'HONEYCOMB_API_KEY (input hidden): '
+        if stty -echo 2>/dev/null; then
+            read -r API_KEY || true
+            stty echo 2>/dev/null
+            printf '\n'
+        else
+            read -r API_KEY || true
+        fi
+    fi
+    if [ -z "$SERVICE_NAME" ]; then
+        DEFAULT_NAME="$(hostname -s 2>/dev/null || hostname || echo conduit)"
+        printf 'CONDUIT_SERVICE_NAME [%s]: ' "$DEFAULT_NAME"
+        read -r SERVICE_NAME || true
+        SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_NAME}"
+    fi
+fi
+
+# ---- seed env file if we have anything to seed -----------------------------
 
 if [ -n "$API_KEY" ] || [ -n "$SERVICE_NAME" ]; then
     if [ -z "$SERVICE_NAME" ]; then
@@ -141,21 +174,44 @@ EOF
     chmod 0640 /etc/conduit/conduit.env
 fi
 
-# ---- enable + start --------------------------------------------------------
+# ---- enable + start (only if env is actually complete) ---------------------
+#
+# We deliberately refuse to enable+start when the required env is empty.
+# Earlier versions emitted a soft warning and started the service anyway,
+# which left every fresh install in a Restart=on-failure crash loop and
+# buried the real "you need to set these vars" message under a misleading
+# "==> conduit is running" line. Fail loud, exit clean.
 
-if [ "$START" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
-    if ! grep -q '^HONEYCOMB_API_KEY=..*' /etc/conduit/conduit.env 2>/dev/null; then
-        cat >&2 <<'EOF'
-warning: HONEYCOMB_API_KEY is not set in /etc/conduit/conduit.env. The
-service is enabled but will fail to export until you fill it in:
+env_is_complete() {
+    grep -q '^HONEYCOMB_API_KEY=..*' /etc/conduit/conduit.env 2>/dev/null \
+        && grep -q '^CONDUIT_SERVICE_NAME=..*' /etc/conduit/conduit.env 2>/dev/null
+}
 
-    sudoedit /etc/conduit/conduit.env
-    sudo systemctl restart conduit
+if [ "$START" -eq 0 ]; then
+    echo "==> install complete. Start when ready: sudo systemctl enable --now conduit"
+elif ! command -v systemctl >/dev/null 2>&1; then
+    echo "==> install complete. systemctl not found; start conduit via your init system."
+elif env_is_complete; then
+    systemctl enable --now conduit
+    echo "==> conduit is running. Tail logs with: sudo journalctl -u conduit -f"
+else
+    cat <<'EOF'
+
+==> Conduit installed but NOT started — required environment is unset.
+
+   1. Edit /etc/conduit/conduit.env and set:
+        HONEYCOMB_API_KEY                  (required)
+        CONDUIT_SERVICE_NAME               (required)
+        CONDUIT_DEPLOYMENT_ENVIRONMENT     (defaults to "production")
+
+   2. Validate the config:
+        sudo -u conduit conduit config --validate -c /etc/conduit/conduit.yaml
+
+   3. Enable and start the agent:
+        sudo systemctl enable --now conduit
+
+   4. Watch the logs:
+        sudo journalctl -u conduit -f
 
 EOF
-    fi
-    systemctl enable --now conduit
-    echo "==> conduit is running. Tail logs with: journalctl -u conduit -f"
-else
-    echo "==> install complete. Start when ready: systemctl enable --now conduit"
 fi
