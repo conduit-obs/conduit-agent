@@ -1,81 +1,61 @@
 # profiles/docker
 
-The Docker profile (M4). Conduit's container deployment shape: the agent
-runs as a peer container, accepts OTLP from other services on the same
-docker network, and forwards to Honeycomb (or a customer gateway).
+The Docker profile (M4 + M9.A). Conduit's container deployment shape: the
+agent runs as a peer container, accepts OTLP from other services on the
+same docker network, and forwards to Honeycomb (or a customer gateway).
 
-## What this directory ships in V0
+## Fragments shipped
 
-**Nothing.** No `hostmetrics.yaml`, no `logs.yaml`. M4 only needs the
-docker profile to do two things, and both are handled outside the
-fragment loader:
+| File | Concern | Loaded when |
+|---|---|---|
+| [`hostmetrics.yaml`](hostmetrics.yaml) | Per-host CPU / memory / disk / filesystem / network / paging / processes scraping, re-rooted at `/hostfs` so the operator's bind mount is the contract. Mirrors the k8s profile shape so dashboards keyed on `system.*` columns work identically across host / container / k8s. | `profile.mode: docker` and `profile.host_metrics` is unset or `true`. |
 
-1. **Bind OTLP receivers to `0.0.0.0`** so peer containers in the same
-   compose / pod / network can reach the agent. Driven by
-   `resolveOTLPBindAddress` in [`internal/expander/expander.go`](../../expander/expander.go);
-   host-mode profiles stay on `127.0.0.1` so a stock `apt-get install`
-   does not silently expose OTLP to the local network.
-2. **Expose `health_check` on `0.0.0.0:13133`** for Docker / k8s
-   liveness probes. That's universal — the `health_check` extension is
-   wired into every Conduit deployment by
-   [`internal/expander/templates/base.yaml.tmpl`](../../expander/templates/base.yaml.tmpl).
+What this profile **does not** ship in V0:
 
-Everything else flows through the OTLP receiver: peer apps push spans,
-metrics, and logs via OTLP to `conduit:4317` / `conduit:4318`, Conduit
-adds the resource shaping + redaction + transform/logs normalization
-the base template performs, and exports.
+- **`logs.yaml`**: container logs flow via OTLP from peer apps (every modern SDK can ship logs over OTLP). A future M9.E may add an on-host filelog scrape of `/var/lib/docker/containers/*/*.log` for operators who want to capture logs from instrumented-but-not-yet-OTLP apps; that recipe needs the same bind-mount + label-mapping work the k8s container-log fragment already does.
 
-## Why no host metrics by default
+What the profile does outside the fragment loader:
 
-Scraping CPU / memory / disk from inside a container only gives you the
-container's own view, not the host's. Getting host-level metrics from a
-containerized agent requires bind-mounting `/proc`, `/sys`, and
-optionally `/etc/passwd` from the host, plus telling `hostmetricsreceiver`
-where they live (`root_path: /hostfs`). That's a deployment-time choice
-the operator must opt into — V0 won't make it for them.
+1. **Bind OTLP receivers to `0.0.0.0`** so peer containers in the same compose / pod / network can reach the agent. Driven by `resolveOTLPBindAddress` in [`internal/expander/expander.go`](../../expander/expander.go); host-mode profiles stay on `127.0.0.1` so a stock `apt-get install` does not silently expose OTLP to the local network.
+2. **Expose `health_check` on `0.0.0.0:13133`** for Docker / k8s liveness probes. That's universal — the `health_check` extension is wired into every Conduit deployment by [`internal/expander/templates/base.yaml.tmpl`](../../expander/templates/base.yaml.tmpl).
 
-The opt-in path:
+## Required bind mounts (the contract)
 
-1. Use a custom `conduit.yaml` (mount it at `/etc/conduit/conduit.yaml`)
-   that sets `profile.mode: linux`. The Linux fragment ships in this
-   repo at [`linux/hostmetrics.yaml`](../linux/hostmetrics.yaml).
-2. In your compose / pod spec, bind-mount the host paths and set
-   `HOST_PROC=/hostfs/proc HOST_SYS=/hostfs/sys` (the upstream
-   `hostmetricsreceiver` reads those env vars to retarget its scrapers).
-3. Run the conduit container with `pid: host` if you want process
-   metrics that aren't filtered to the container's PID namespace.
+`hostmetrics.yaml` sets `root_path: /hostfs`, which means every scraper resolves `/proc`, `/sys`, and any filesystem path it walks under that prefix. The matching compose snippet is:
 
-The full M4 docker docs in [`deploy/docker/README.md`](../../../deploy/docker/README.md)
-walk through this. M9 will pick a default and ship a tested
-`docker/hostmetrics.yaml`.
+```yaml
+services:
+  conduit:
+    pid: host                                # unlock processes scraper
+    volumes:
+      - /proc:/hostfs/proc:ro,rslave
+      - /sys:/hostfs/sys:ro,rslave
+      - /:/hostfs/:ro,rslave                 # filesystem scraper mountpoints
+    environment:
+      - HOST_PROC_MOUNTINFO=/hostfs/proc/self/mountinfo
+```
+
+`pid: host` is what the `processes` scraper needs — without it, the container's PID namespace masks every PID outside its own. `HOST_PROC_MOUNTINFO` tells the filesystem scraper which mountinfo file lists the host's mountpoints (rather than the container's).
+
+Operators who want OTLP-only on docker (no host scraping) set `profile.host_metrics: false`; the bind mounts become irrelevant.
+
+The reference compose example with the full bind-mount recipe is at [`deploy/docker/compose-linux-host.yaml`](../../../deploy/docker/compose-linux-host.yaml).
 
 ## Profile contract status
 
-[`PROFILE_SPEC.md`](../PROFILE_SPEC.md) §1 ("Telemetry the profile MUST
-emit") applies to docker too, with one platform-specific carve-out:
+[`PROFILE_SPEC.md`](../PROFILE_SPEC.md) §1 ("Telemetry the profile MUST emit") status:
 
-| Section | M4 status |
+| Section | M9.A status |
 |---|---|
 | Resource attributes | `host.name`, `os.type`, etc. provided by `resourcedetectionprocessor` (universal). `container.id` / `container.name` come from incoming OTLP — peer apps' SDKs add them automatically. |
-| Host metrics | **Deferred to M9.** Docker profile ships zero metrics scrapers in V0; everything in the metrics pipeline arrives via OTLP from peer apps. |
-| Logs | **Deferred to M9.** No filelog scraper for container logs in V0; peer apps send logs via OTLP. M9 will decide whether to add a host-level `/var/lib/docker/containers/*/*.log` filelog or rely on the docker daemon's OTLP log driver. |
+| Host metrics | **Done.** `system.cpu.{usage,utilization}`, `system.memory.{usage,utilization}`, `system.filesystem.{usage,utilization}`, `system.disk.io`, `system.network.io`, `system.load.*`, `system.paging.{usage,utilization}`, `system.processes.*` all emitted via the `hostmetrics.yaml` fragment when bind mounts are in place. |
+| Logs | **Deferred to M9.E.** Peer apps push logs via OTLP. |
 
-The dashboard quality bar (`PROFILE_SPEC.md` §3) applies to docker once
-the data lands: a `dashboards/docker-host-overview.json` is now an M9
-deliverable, designed to be a docker-native opinionated board (keyed off
-`container.name` / `container.image.name`, narrative organized around
-container-fleet questions an operator actually has) — not a copy of the
-host-overview skeleton. The deferral is recorded in the
-milestone plan §M4
-(scope) and §M9 (deliverables).
+The dashboard quality bar (`PROFILE_SPEC.md` §3) ships at M9.D as [`dashboards/docker-host-overview.json`](../../../dashboards/docker-host-overview.json) — a docker-native opinionated board (keyed off `host.name` + the standard `system.*` metric vocabulary) that is intentionally a peer of the linux board, not a copy.
 
 ## See also
 
-- [`deploy/docker/Dockerfile`](../../../deploy/docker/Dockerfile) — the
-  multi-stage build that produces the V0 image.
-- [`deploy/docker/conduit.yaml.default`](../../../deploy/docker/conduit.yaml.default)
-  — the in-image default config that sets `profile.mode: docker`.
-- [`deploy/docker/compose-linux-host.yaml`](../../../deploy/docker/compose-linux-host.yaml)
-  — runnable example.
-- [`internal/expander/expander.go`](../../expander/expander.go) §`resolveOTLPBindAddress`
-  for the bind-address rule.
+- [`deploy/docker/Dockerfile`](../../../deploy/docker/Dockerfile) — the multi-stage build that produces the V0 image.
+- [`deploy/docker/conduit.yaml.default`](../../../deploy/docker/conduit.yaml.default) — the in-image default config that sets `profile.mode: docker`.
+- [`deploy/docker/compose-linux-host.yaml`](../../../deploy/docker/compose-linux-host.yaml) — runnable example with the full host-bind-mount recipe.
+- [`internal/expander/expander.go`](../../expander/expander.go) §`resolveOTLPBindAddress` for the bind-address rule.

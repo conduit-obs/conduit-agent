@@ -54,6 +54,7 @@ project). Probe collector liveness with `curl http://127.0.0.1:13133`.
 | Runs as non-root by default | `USER nonroot:nonroot` (UID 65532) at the bottom of both Dockerfiles. |
 | Health check endpoint reachable | `health_check` extension wired into the base template; bound to `0.0.0.0:13133`. |
 | OTLP receivers bind to `0.0.0.0` in Docker profile | [`conduit.yaml.default`](conduit.yaml.default) sets `profile.mode: docker`; the expander emits `0.0.0.0:4317` / `:4318` for that mode and stays on `127.0.0.1` for every host mode. |
+| Host metrics from a containerized agent (M9.A) | `profile.mode: docker` loads [`internal/profiles/docker/hostmetrics.yaml`](../../internal/profiles/docker/hostmetrics.yaml) with `root_path: /hostfs`. Operator's compose binds `/proc`, `/sys`, `/` to `/hostfs` and sets `pid: host` (see [`compose-linux-host.yaml`](compose-linux-host.yaml)); set `profile.host_metrics: false` to opt out. |
 
 ## Release pipeline (publish to ghcr.io)
 
@@ -99,43 +100,33 @@ docker resolves the right arch via the manifest list automatically; the
 per-arch tags exist mostly for CI plumbing and for users who want to
 pin to one arch explicitly.
 
-## Optional: host metrics from inside the container
+## Host metrics from the docker host (M9.A)
 
-The default Docker profile is **OTLP-only** — Conduit does not scrape
-the host's CPU / memory / disk by default. To monitor the docker host
-itself from a containerized agent:
+`profile.mode: docker` now ships a `hostmetrics.yaml` fragment that mirrors the linux shape — same scrapers, same `*.utilization` opt-ins, same `system.*` column vocabulary — but expects the operator's compose / `docker run` to bind-mount `/proc`, `/sys`, and `/` to `/hostfs` so the scrapers see the host's view rather than the container's. The contract is documented in [`internal/profiles/docker/README.md`](../../internal/profiles/docker/README.md) and the compose example below carries it out:
 
-1. Mount your own `conduit.yaml` over `/etc/conduit/conduit.yaml`, with
-   `profile.mode: linux` instead of `docker`. (The OTLP bind stays on
-   `127.0.0.1` for `linux` mode, which is fine inside the container —
-   peer containers reach the agent via the docker network's published
-   ports, not the listener address.)
-2. Bind-mount the host's `/proc` and `/sys` into the container at
-   `/hostfs`, and tell the upstream `hostmetricsreceiver` where they
-   are via env vars:
+```yaml
+services:
+  conduit:
+    image: ghcr.io/conduit-obs/conduit-agent:latest
+    pid: host                                # unlock processes scraper
+    volumes:
+      - /proc:/hostfs/proc:ro,rslave
+      - /sys:/hostfs/sys:ro,rslave
+      - /:/hostfs/:ro,rslave                 # filesystem scraper mountpoints
+    environment:
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY}
+      CONDUIT_SERVICE_NAME: edge-host
+      CONDUIT_DEPLOYMENT_ENVIRONMENT: production
+      HOST_PROC_MOUNTINFO: /hostfs/proc/self/mountinfo
+```
 
-   ```yaml
-   services:
-     conduit:
-       image: ghcr.io/conduit-obs/conduit-agent:latest
-       volumes:
-         - /proc:/hostfs/proc:ro
-         - /sys:/hostfs/sys:ro
-         - ./conduit.yaml:/etc/conduit/conduit.yaml:ro
-       environment:
-         HOST_PROC: /hostfs/proc
-         HOST_SYS: /hostfs/sys
-       pid: host    # required for process metrics
-   ```
+`pid: host` is what unlocks the `processes` scraper — without it, the container's PID namespace masks every PID outside its own. `HOST_PROC_MOUNTINFO` tells the filesystem scraper which mountinfo file lists the host's mountpoints (rather than the container's).
 
-3. (Optional, for `system.network.connections`) run with
-   `network_mode: host` so the agent sees the host's TCP socket table.
+The privilege trade-off is real and intentional: the bind mounts give the agent visibility into the host's `/proc`, `/sys`, and root filesystem (read-only). For deployments where that's too much, set `profile.host_metrics: false` in a custom `conduit.yaml` to drop the fragment and stay OTLP-only — the bind mounts then become irrelevant.
 
-This path is intentionally an explicit opt-in: the bind mounts and
-`pid: host` give the agent visibility into the host's namespaces, which
-is a deliberate privilege escalation. M9 will ship a tested
-`internal/profiles/docker/hostmetrics.yaml` plus a vetted compose
-recipe so this stops being roll-your-own.
+[`compose-linux-host.yaml`](compose-linux-host.yaml) ships the full recipe end-to-end; running it produces a Conduit container that emits the same `system.*` metrics a `linux` host install would, plus all the OTLP traffic peer apps send via `conduit:4317` / `conduit:4318`.
+
+The matching default board lives at [`dashboards/docker-host-overview.json`](../../dashboards/docker-host-overview.json) (M9.D).
 
 ## See also
 

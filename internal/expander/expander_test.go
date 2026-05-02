@@ -443,6 +443,54 @@ func TestExpand_HostMetrics_EnablesUtilizationMetrics(t *testing.T) {
 	}
 }
 
+// transform/logs's M9.B redaction block masks well-known credential
+// patterns in body and attributes["message"] BEFORE normalized_message
+// is computed. The contract is "default-on, narrow regex set" —
+// AKIA-prefixed AWS access key ids, JWTs, and a small set of
+// case-insensitive credential key=value patterns. This test locks in:
+//
+//   1. The redaction block precedes the normalized_message block in
+//      the rendered YAML so the latter sees redacted input (otherwise
+//      a user grouping by normalized_message would still see
+//      plaintext credentials in the data).
+//   2. Every documented pattern is present.
+//   3. The operator-facing replacement string ("****REDACTED****") is
+//      stable so downstream queries can detect "this record was
+//      redacted by Conduit" without parsing the original pattern.
+func TestExpand_TransformLogs_DefaultRedactionBlock(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		// Triggering condition: at least one of body or message is a
+		// string. OTLP logs from apps with structured (map) bodies
+		// pass through this block unchanged.
+		`'IsString(body) or attributes["message"] != nil'`,
+		// AWS access key id pattern, applied to both body and message.
+		`AKIA[0-9A-Z]{16}`,
+		`AKIA****REDACTED****`,
+		// JWT prefix + three-segment structure.
+		`eyJ[A-Za-z0-9_=-]{8,}`,
+		`eyJ****REDACTED****`,
+		// Credential key=value catchphrases (case-insensitive).
+		`(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)`,
+		`$1=****REDACTED****`,
+	})
+	// The redaction block must come BEFORE the normalized_message
+	// block — otherwise normalized_message inherits the original
+	// (un-redacted) message and our templating effort leaks credentials
+	// into the grouping column.
+	redIdx := strings.Index(out, "AKIA****REDACTED****")
+	normIdx := strings.Index(out, `set(attributes["normalized_message"]`)
+	if redIdx == -1 || normIdx == -1 {
+		t.Fatalf("missing expected statements; redaction=%d normalized=%d", redIdx, normIdx)
+	}
+	if redIdx >= normIdx {
+		t.Errorf("redaction block must precede normalized_message block; got redaction at %d, normalized at %d", redIdx, normIdx)
+	}
+}
+
 // Filelog leaves raw syslog lines without severity (severity_number=0),
 // which makes Honeycomb severity filters drop them. transform/logs
 // backfills INFO when — and only when — nothing upstream set a severity,
@@ -488,33 +536,68 @@ func TestExpand_ContainerProfiles_BindAllInterfaces(t *testing.T) {
 	}
 }
 
-// docker is intentionally fragment-less in V0: scraping host metrics
-// from inside a container needs /proc and /sys bind mounts the user
-// must opt into at run time, so the docker profile only changes OTLP
-// bind behavior and leaves receiver pipelines OTLP-only.
-func TestExpand_DockerProfile_NoPlatformFragments(t *testing.T) {
+// docker (M9.A) ships a host-metrics fragment that mirrors the linux
+// shape but expects the operator's compose file to bind-mount the host
+// root at /hostfs. The rendered config carries the `root_path: /hostfs`
+// re-rooting + the *.utilization opt-ins so dashboards keyed on
+// `system.*` metrics work identically across host / container / k8s.
+// Docker still does NOT ship a system-logs fragment in V0 — peer apps
+// push container logs via OTLP, the on-host filelog scrape would
+// require bind-mounting /var/lib/docker/containers and is M9.E
+// territory.
+func TestExpand_DockerProfile_LoadsHostMetrics(t *testing.T) {
 	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeDocker}))
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
-	mustNotContain(t, out, []string{
+	mustContain(t, out, []string{
 		`hostmetrics:`,
+		// /hostfs re-rooting is the contract between the fragment and
+		// the operator's compose file — without it, the scrapers report
+		// the container's own view of /proc instead of the host's.
+		`root_path: /hostfs`,
+		// *.utilization opt-ins so platform-portable dashboards plot
+		// percent-used directly.
+		`system.cpu.utilization:`,
+		`system.memory.utilization:`,
+		`system.filesystem.utilization:`,
+		`system.paging.utilization:`,
+	})
+	// Logs and k8s-only fragments must NOT appear.
+	mustNotContain(t, out, []string{
 		`filelog/system:`,
 		`journald:`,
 		`kubeletstats:`,
 		`filelog/k8s:`,
 		`k8sattributes:`,
 	})
-	// Traces and logs are otlp-only under docker; metrics also gets
-	// the span_metrics connector tee (M8 RED-from-spans) which is
-	// independent of any platform fragment.
+	// Traces and logs stay otlp-only; metrics gets hostmetrics +
+	// span_metrics on top (the span_metrics is the M8 RED tee, not a
+	// docker-specific receiver).
 	for _, p := range []string{"traces", "logs"} {
 		if got := pipelineReceivers(t, out, p); !equalSet(got, []string{"otlp"}) {
 			t.Errorf("%s pipeline should only have otlp under docker profile; got %v", p, got)
 		}
 	}
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "hostmetrics", "span_metrics"}) {
+		t.Errorf("metrics pipeline under docker profile = %v; want [otlp hostmetrics span_metrics]", got)
+	}
+}
+
+// Docker's host_metrics: false toggle is the operator opt-out for
+// deployments that aren't bind-mounting /proc — without the toggle,
+// hostmetrics would scrape the container's view of the world, which
+// is rarely useful and noisy on dashboards.
+func TestExpand_DockerProfile_HostMetricsDisabled(t *testing.T) {
+	disabled := false
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeDocker, HostMetrics: &disabled})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{`hostmetrics:`, `root_path: /hostfs`})
 	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "span_metrics"}) {
-		t.Errorf("metrics pipeline under docker profile = %v; want [otlp span_metrics]", got)
+		t.Errorf("metrics pipeline under docker + host_metrics=false = %v; want [otlp span_metrics]", got)
 	}
 }
 

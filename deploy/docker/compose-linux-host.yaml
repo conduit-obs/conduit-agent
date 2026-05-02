@@ -24,11 +24,15 @@
 #   4. Probe health with `curl http://127.0.0.1:13133` — 200 means every
 #      configured pipeline is up.
 #
+# Host metrics (M9.A): the in-image default config sets
+# profile.mode=docker, which loads the docker host-metrics fragment.
+# That fragment expects /proc, /sys, and / bind-mounted to /hostfs so
+# the scrapers see the host's view rather than the container's. The
+# bind mounts and `pid: host` below are what makes that work — set
+# profile.host_metrics=false in a custom conduit.yaml to opt out and
+# drop the mounts.
+#
 # What this compose deliberately does NOT do:
-#   - It does not bind-mount /proc and /sys, so conduit does not scrape
-#     the host's CPU / memory / disk metrics. Set profile.mode=linux in a
-#     custom conduit.yaml and add the bind mounts (see
-#     deploy/docker/README.md) if you want host metrics from this agent.
 #   - It does not expose ports to the LAN. To accept OTLP from other
 #     hosts, change `127.0.0.1:` to `0.0.0.0:` in the ports list and
 #     understand the security trade-off.
@@ -36,10 +40,26 @@ services:
   conduit:
     image: ghcr.io/conduit-obs/conduit-agent:latest
     container_name: conduit
+    # pid: host unlocks the processes scraper — without it, the
+    # container's PID namespace masks every PID outside its own and
+    # `system.processes.*` reports a single process.
+    pid: host
     environment:
       HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY:?set HONEYCOMB_API_KEY in .env or your shell}
       CONDUIT_SERVICE_NAME: ${CONDUIT_SERVICE_NAME:-conduit-docker}
       CONDUIT_DEPLOYMENT_ENVIRONMENT: ${CONDUIT_DEPLOYMENT_ENVIRONMENT:-production}
+      # HOST_PROC_MOUNTINFO points the filesystem scraper at the
+      # host's mountinfo (rather than the container's) so the
+      # `system.filesystem.*` metrics report host filesystems.
+      HOST_PROC_MOUNTINFO: /hostfs/proc/self/mountinfo
+    volumes:
+      # /hostfs is the contract documented in
+      # internal/profiles/docker/hostmetrics.yaml. Read-only + rslave
+      # so we observe the host without touching it; rslave so new
+      # mounts on the host become visible without a restart.
+      - /proc:/hostfs/proc:ro,rslave
+      - /sys:/hostfs/sys:ro,rslave
+      - /:/hostfs/:ro,rslave
     ports:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"

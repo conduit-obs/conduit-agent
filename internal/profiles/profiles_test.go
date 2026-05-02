@@ -8,7 +8,7 @@ import (
 
 func TestAvailable_HasShippedPlatforms(t *testing.T) {
 	got := Available()
-	want := map[string]bool{"linux": true, "darwin": true, "k8s": true}
+	want := map[string]bool{"linux": true, "darwin": true, "docker": true, "k8s": true}
 	if len(got) < len(want) {
 		t.Fatalf("Available: got %v, want at least %v", got, keys(want))
 	}
@@ -47,6 +47,12 @@ func TestHas(t *testing.T) {
 		// kubelet is k8s-only; host platforms have no analogue.
 		{"linux", SignalKubelet, false},
 		{"darwin", SignalKubelet, false},
+		// docker has no system-logs / kubelet fragments; M9.A ships
+		// only hostmetrics for it. Container logs flow via OTLP from
+		// peer apps in V0.
+		{"docker", SignalHostMetrics, true},
+		{"docker", SignalSystemLogs, false},
+		{"docker", SignalKubelet, false},
 		{"plan9", SignalHostMetrics, false},
 	}
 	for _, tc := range cases {
@@ -71,6 +77,11 @@ func TestLoad_ContentSanity(t *testing.T) {
 		{"k8s", SignalHostMetrics, []string{"hostmetrics:", "root_path: /hostfs", "scrapers:", "system.cpu.utilization"}},
 		{"k8s", SignalKubelet, []string{"kubeletstats:", "auth_type: serviceAccount", "K8S_NODE_NAME"}},
 		{"k8s", SignalSystemLogs, []string{"filelog/k8s:", "/var/log/pods", "type: container"}},
+		// docker (M9.A) ships hostmetrics in the same shape as k8s
+		// — same scrapers, same /hostfs re-rooting — so dashboards
+		// keyed on `system.*` columns work identically across host /
+		// container / k8s. Docker has no logs.yaml in V0.
+		{"docker", SignalHostMetrics, []string{"hostmetrics:", "root_path: /hostfs", "scrapers:", "system.cpu.utilization", "processes:"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.platform+"/"+string(tc.signal), func(t *testing.T) {

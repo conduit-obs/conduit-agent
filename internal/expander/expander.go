@@ -401,13 +401,14 @@ func resolveOTLPBindAddress(p *config.Profile) string {
 // resolvePlatform turns a *config.Profile into the platform name to load
 // fragments for, or "" when no profile applies. Defaults to none.
 //
-// Docker is intentionally fragment-less in V0: scraping host metrics from
-// inside a container needs /proc and /sys bind mounts that the user must
-// opt into at run time, so the docker profile only changes OTLP bind
-// behavior (handled by resolveOTLPBindAddress) and leaves receiver
-// fragments empty. Operators who want host metrics from a containerized
-// agent set profile.mode=linux on a container with the bind mounts in
-// place; that path is documented in deploy/docker/README.md.
+// docker (M9.A) ships a host-metrics fragment that mirrors the linux
+// shape but expects /proc and /sys to be bind-mounted to /hostfs by
+// the operator's compose file (the recipe is in
+// deploy/docker/README.md and deploy/docker/compose-linux-host.yaml).
+// The `root_path: /hostfs` re-roots every scraper there so the
+// rendered fragment is identical across docker / k8s. profile.mode=
+// docker still flips OTLP receivers to 0.0.0.0 for peer-container
+// reachability (handled by resolveOTLPBindAddress).
 //
 // k8s loads three fragments (hostmetrics + kubelet + logs) — the Helm
 // chart in deploy/helm/conduit-agent provides the matching DaemonSet
@@ -417,9 +418,9 @@ func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 		return ""
 	}
 	switch p.Mode {
-	case config.ProfileModeNone, config.ProfileModeDocker:
+	case config.ProfileModeNone:
 		return ""
-	case config.ProfileModeLinux, config.ProfileModeDarwin, config.ProfileModeK8s:
+	case config.ProfileModeLinux, config.ProfileModeDarwin, config.ProfileModeDocker, config.ProfileModeK8s:
 		return string(p.Mode)
 	case config.ProfileModeAuto, "":
 		detected := profiles.DetectPlatform()
@@ -462,7 +463,16 @@ func loadProfileFragments(platform string, p *config.Profile) (string, pipelineR
 		ids pipelineReceiverIDs
 	)
 
-	if p.HostMetricsEnabled() {
+	// Both the host-metrics and system-logs fragments are gated by the
+	// same has-fragment-AND-feature-enabled rule: the user's toggle
+	// expresses intent ("I want host metrics on"), the registry check
+	// expresses capability ("Conduit ships a fragment for this
+	// platform/signal pair"). Docker is the first platform that
+	// ships hostmetrics but not logs (V0 docker logs are still OTLP-
+	// only — peer apps push container logs to the agent, no on-host
+	// filelog scrape), so the absence path has to be silent rather
+	// than an error.
+	if p.HostMetricsEnabled() && profiles.Has(platform, profiles.SignalHostMetrics) {
 		body, err := profiles.Load(platform, profiles.SignalHostMetrics)
 		if err != nil {
 			return "", ids, fmt.Errorf("expand: load %s hostmetrics fragment: %w", platform, err)
@@ -483,7 +493,7 @@ func loadProfileFragments(platform string, p *config.Profile) (string, pipelineR
 		}
 	}
 
-	if p.SystemLogsEnabled() {
+	if p.SystemLogsEnabled() && profiles.Has(platform, profiles.SignalSystemLogs) {
 		body, err := profiles.Load(platform, profiles.SignalSystemLogs)
 		if err != nil {
 			return "", ids, fmt.Errorf("expand: load %s logs fragment: %w", platform, err)

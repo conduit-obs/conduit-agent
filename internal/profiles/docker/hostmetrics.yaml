@@ -1,0 +1,64 @@
+# Docker default host-metrics profile.
+#
+# Splices in under receivers: in the rendered upstream OTel YAML and feeds
+# the metrics pipeline alongside otlp. The shape mirrors the linux and k8s
+# profiles (same scrapers, same *.utilization opt-ins) so dashboards keyed
+# on `system.*` metrics work identically across host / container / k8s
+# deployments.
+#
+# root_path: /hostfs is the contract between this fragment and the
+# operator's compose file (or `docker run` flags). Every scraper resolves
+# /proc and /sys (and any path it walks for filesystems) under root_path,
+# so:
+#
+#   - cpu / memory / load / paging read /hostfs/proc/{stat,meminfo,...}
+#   - disk reads /hostfs/proc/diskstats
+#   - filesystem reads /hostfs/proc/{self/mountinfo,mounts}
+#   - processes reads /hostfs/proc/<pid>/
+#   - network reads /hostfs/proc/net/dev
+#
+# Without the matching host bind mounts, hostmetrics reports the
+# container's own view of /proc rather than the host's — which is rarely
+# what an operator wants from a host-monitoring agent. The required
+# compose snippet is documented in deploy/docker/README.md and shipped in
+# deploy/docker/compose-linux-host.yaml; the pattern is:
+#
+#   services:
+#     conduit:
+#       pid: host
+#       volumes:
+#         - /proc:/hostfs/proc:ro,rslave
+#         - /sys:/hostfs/sys:ro,rslave
+#         - /:/hostfs/:ro,rslave         # for filesystem scraper mountpoints
+#       environment:
+#         - HOST_PROC_MOUNTINFO=/hostfs/proc/self/mountinfo
+#
+# `pid: host` is what unlocks the processes scraper — without it, the
+# container's PID namespace masks every PID outside its own.
+#
+# Operators who want OTLP-only on docker (no host scraping) set
+# profile.host_metrics: false; the bind mounts become irrelevant.
+hostmetrics:
+  collection_interval: 60s
+  root_path: /hostfs
+  scrapers:
+    cpu:
+      metrics:
+        system.cpu.utilization:
+          enabled: true
+    memory:
+      metrics:
+        system.memory.utilization:
+          enabled: true
+    load:
+    disk:
+    filesystem:
+      metrics:
+        system.filesystem.utilization:
+          enabled: true
+    network:
+    paging:
+      metrics:
+        system.paging.utilization:
+          enabled: true
+    processes:

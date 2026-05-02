@@ -95,18 +95,33 @@ processors:
       - sources:
           - from: connection
 {{- end }}
-  # transform/logs does two things, in two independent statement blocks:
+  # transform/logs does three things, in three independent statement
+  # blocks (run in declaration order; each block's `where` predicate
+  # filters records independently):
   #
-  #   1. Computes a normalized_message attribute alongside the original
-  #      (parsed) message so Honeycomb can group similar log lines by
+  #   1. (M9.B) Masks well-known secret patterns in body and
+  #      attributes["message"] BEFORE downstream processing copies them
+  #      into normalized_message. Default-on per ADR-0006's spirit and
+  #      [01-product-requirements.md] §FR-9 — even a Conduit operator who
+  #      hasn't read the redaction docs should not accidentally ship
+  #      plaintext credentials to Honeycomb / Datadog / Grafana Cloud.
+  #      Patterns are intentionally narrow (high-confidence prefix +
+  #      length + structure) to avoid false positives that would mask
+  #      legitimate hex strings or base64 payloads. Operators who need
+  #      stricter masking layer additional rules via overrides:
+  #      (ADR-0012); operators who need looser masking are typically
+  #      better off fixing their app's logging.
+  #
+  #   2. Computes a normalized_message attribute alongside the (now
+  #      redacted) message so Honeycomb can group similar log lines by
   #      template — masking the high-cardinality bits (PIDs, IDs, UUIDs,
   #      IPs, key=value values) that would otherwise make every line
-  #      unique. body is intentionally left untouched. Only runs when
-  #      filelog's default parser populated attributes["message"] (BSD or
-  #      ISO syslog lines); OTLP logs from upstream apps and journald
-  #      entries pass through unmodified.
+  #      unique. body is intentionally left untouched here. Only runs
+  #      when filelog's default parser populated attributes["message"]
+  #      (BSD or ISO syslog lines); OTLP logs from upstream apps and
+  #      journald entries pass through unmodified.
   #
-  #   2. Defaults severity to INFO when no upstream stage set one.
+  #   3. Defaults severity to INFO when no upstream stage set one.
   #      Filelog parses raw syslog lines and leaves severity_number=0
   #      (UNSPECIFIED), which makes Honeycomb severity filters drop
   #      those records. journald maps PRIORITY -> severity, and OTLP
@@ -115,6 +130,32 @@ processors:
   #      keeps us from overwriting either.
   transform/logs:
     log_statements:
+      - context: log
+        conditions:
+          - 'IsString(body) or attributes["message"] != nil'
+        statements:
+          # AWS access key IDs ("AKIA"+16 uppercase alphanumerics) are
+          # the most distinctive credential pattern in cloud workloads
+          # — the matching 40-char secret access key is too generic
+          # for safe regex matching, so masking the access key id is
+          # the practical signal that "an AWS credential leaked here".
+          - 'replace_pattern(body, "AKIA[0-9A-Z]{16}", "AKIA****REDACTED****") where IsString(body)'
+          - 'replace_pattern(attributes["message"], "AKIA[0-9A-Z]{16}", "AKIA****REDACTED****") where attributes["message"] != nil'
+          # JSON Web Tokens — three base64url-encoded segments separated
+          # by dots, prefixed with the standard "eyJ" header. Distinctive
+          # enough to mask without false positives because the prefix
+          # plus three-segment structure plus minimum lengths are very
+          # unlikely to collide with non-JWT content.
+          - 'replace_pattern(body, "eyJ[A-Za-z0-9_=-]{8,}\\.[A-Za-z0-9_=-]{4,}\\.[A-Za-z0-9_=.+/-]{4,}", "eyJ****REDACTED****") where IsString(body)'
+          - 'replace_pattern(attributes["message"], "eyJ[A-Za-z0-9_=-]{8,}\\.[A-Za-z0-9_=-]{4,}\\.[A-Za-z0-9_=.+/-]{4,}", "eyJ****REDACTED****") where attributes["message"] != nil'
+          # Common credential key=value patterns. Case-insensitive on the
+          # key name, terminated by whitespace / comma / semicolon /
+          # ampersand / quote so URL-style and form-style encodings both
+          # mask cleanly. The value (everything after the =) is replaced
+          # with "****REDACTED****"; the key is preserved so operators
+          # can still see WHAT was redacted at query time.
+          - 'replace_pattern(body, "(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)=[^\\s,&;\"]+", "$1=****REDACTED****") where IsString(body)'
+          - 'replace_pattern(attributes["message"], "(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)=[^\\s,&;\"]+", "$1=****REDACTED****") where attributes["message"] != nil'
       - context: log
         conditions:
           - 'attributes["message"] != nil'

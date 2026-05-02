@@ -45,7 +45,7 @@ const (
 	SignalKubelet Signal = "kubelet"
 )
 
-//go:embed all:linux all:darwin all:k8s
+//go:embed all:linux all:darwin all:docker all:k8s
 var fragmentsFS embed.FS
 
 // Available reports the platform names for which Conduit ships at least one
