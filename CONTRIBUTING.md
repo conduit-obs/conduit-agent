@@ -1,24 +1,24 @@
 # Contributing to Conduit
 
-Thanks for your interest in Conduit. The project is in pre-alpha (Milestone M1 — skeleton only). The notes below set expectations for contributing, with the hard rules called out first.
+Thanks for your interest in Conduit. The notes below set expectations for contributing, with the hard rules called out first.
 
 ## Hard rules
 
 These are non-negotiable. PRs that violate them are closed without further discussion.
 
-### 1. No verbatim code copy from the Observe Agent reference
+### 1. Clean-room implementation
 
-Conduit's planning explicitly used Observe's open-source agent (`github.com/observeinc/observe-agent`) as conceptual reference material. Both projects are Apache-2.0 licensed, so verbatim copying is *legal* — but Conduit is a clean-room implementation as a matter of project discipline ([ADR-0013](docs/adr/adr-0013.md)).
+Conduit is a clean-room implementation as a matter of project discipline ([ADR-0013](docs/adr/adr-0013.md)). Patterns from other Apache-2.0 OpenTelemetry-agent projects may be borrowed conceptually with attribution; **no code is copied verbatim, even from compatibly-licensed sources.**
 
-When a PR is influenced by something you read in the Observe codebase, you must declare in the PR description which of the following applies:
+When a PR is influenced by code you read elsewhere, declare in the PR description which of the following applies:
 
 | Type | Means | Acceptable? |
 |---|---|---|
-| **Inspiration** | You read the Observe code and wrote yours from scratch with no clipboard contact | Yes |
+| **Inspiration** | You read the reference code and wrote yours from scratch with no clipboard contact | Yes |
 | **Adaptation** | You copied a snippet and modified it | No — rewrite from scratch |
 | **Verbatim copy** | You copied the code as-is | No — rewrite from scratch |
 
-Reviewers actively look for verbatim copy. If a reviewer asks "did this come from Observe?" the answer must be yes/no with an honest description.
+Reviewers actively look for verbatim copy. If asked, the answer must be yes/no with an honest description of any reference material.
 
 ### 2. Pure upstream OpenTelemetry components in V0
 
@@ -47,15 +47,14 @@ Required tooling:
 - Go 1.23 or newer.
 - `golangci-lint` (install via `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`).
 
-`make install-ocb` downloads a pinned OpenTelemetry Collector Builder binary into `./bin/`. M1 does not invoke it; M2 does.
+`make install-ocb` downloads a pinned OpenTelemetry Collector Builder binary into `./bin/`. Required when you change [`builder-config.yaml`](builder-config.yaml) and need to regenerate the embedded collector.
 
 ## How to propose changes
 
 1. Open an issue describing the change before opening a PR for anything more than a typo. We close large surprise PRs.
-2. Reference the relevant milestone (`M1` … `M13`, see the status table in [`README.md`](README.md)) in the PR description.
-3. Keep PRs focused. One concept per PR.
-4. Add tests for new behavior. Update goldens for config-render changes (post-M2).
-5. Update docs in the same PR. Schema-drift bugs are a chronic OSS-project failure mode and we have a CI gate to prevent them.
+2. Keep PRs focused. One concept per PR.
+3. Add tests for new behavior. Update goldens (`make update-goldens`) for any config-render changes.
+4. Update docs in the same PR. Schema-drift bugs are a chronic OSS-project failure mode and we have a CI gate to prevent them.
 
 ## Architecture Decision Records (ADRs)
 
@@ -78,7 +77,7 @@ CI runs lint, tests, govulncheck, and CodeQL on every PR.
 ## Commits and PRs
 
 - Commit messages: short subject, blank line, optional body. Reference issue numbers where applicable.
-- Sign your commits if your platform supports it. (Not required in M1; will be required for release tags from M12 onwards.)
+- Sign your commits if your platform supports it. Required for release tags.
 
 ## Code of conduct
 

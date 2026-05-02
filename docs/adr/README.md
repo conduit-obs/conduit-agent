@@ -29,7 +29,7 @@ The 18 V0 baseline ADRs are committed alongside the M1 skeleton. They lock in th
 | [0010](adr-0010.md) | Refinery is a sub-field of Honeycomb, not its own output mode |
 | [0011](adr-0011.md) | `conduit` CLI shape |
 | [0012](adr-0012.md) | `conduit.yaml` expands to upstream collector YAML; `overrides:` is the only escape hatch |
-| [0013](adr-0013.md) | Apache-2.0 license; clean-room implementation; Observe is reference only |
+| [0013](adr-0013.md) | Apache-2.0 license; clean-room implementation |
 | [0014](adr-0014.md) | Monthly MINOR cadence pinned to upstream OTel Collector MINOR |
 | [0015](adr-0015.md) | Field-engineer-promisable support boundaries |
 | [0016](adr-0016.md) | `memorylimiter` first, `batch` last, persistent queue on, redaction on |

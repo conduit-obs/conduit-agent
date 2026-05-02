@@ -34,4 +34,4 @@ make build              # go build ./bin/conduit
 
 ## Why we go this route
 
-See [`docs/adr/adr-0003.md`](../../docs/adr/adr-0003.md) (OCB as the build engine) and [`docs/adr/adr-0004.md`](../../docs/adr/adr-0004.md) (pure-upstream components only). The fold-and-rewrite pattern is informed by the Observe Agent reference (Apache-2.0; Conduit is a clean-room implementation per ADR-0013).
+See [`docs/adr/adr-0003.md`](../../docs/adr/adr-0003.md) (OCB as the build engine) and [`docs/adr/adr-0004.md`](../../docs/adr/adr-0004.md) (pure-upstream components only). Conduit is a clean-room implementation ([ADR-0013](../../docs/adr/adr-0013.md)); the fold-and-rewrite pattern is the project's own.
