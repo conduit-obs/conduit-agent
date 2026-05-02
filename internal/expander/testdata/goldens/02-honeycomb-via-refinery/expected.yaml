@@ -212,16 +212,25 @@ processors:
           - 'replace_pattern(body, "(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)=[^\\s,&;\"]+", "$1=****REDACTED****") where IsString(body)'
           - 'replace_pattern(attributes["message"], "(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)=[^\\s,&;\"]+", "$1=****REDACTED****") where attributes["message"] != nil'
       - context: log
+        # Single AND'd condition (not two list items) so OTTL
+        # short-circuits — IsMatch is never invoked on a non-string
+        # body. Journald (and any other receiver that emits structured
+        # bodies as pcommon.Map) hit this path; calling IsMatch on a
+        # Map errors in OTTL rather than returning false, and the
+        # transform processor in contrib v0.151.0 can let a block
+        # execute through that error. The per-statement `where
+        # IsString(body)` guard below is the second line of defense.
         conditions:
-          - 'IsString(body)'
-          - 'IsMatch(body, "^\\s*\\{")'
+          - 'IsString(body) and IsMatch(body, "^\\s*\\{")'
         statements:
           # Parse once into the per-record cache so subsequent
           # statements can index without re-parsing. ParseJSON errors
           # are non-fatal in OTTL — malformed JSON leaves cache["json"]
           # unset and every gated statement below skips via its
-          # cache["json"] != nil short-circuit.
-          - 'set(cache["json"], ParseJSON(body))'
+          # cache["json"] != nil short-circuit. The explicit
+          # `where IsString(body)` here defends against the same
+          # OTTL block-conditions edge case described above.
+          - 'set(cache["json"], ParseJSON(body)) where IsString(body)'
           # Trace / span id lift: three naming conventions are common
           # in the wild (OTel-canonical trace_id, camelCase traceId,
           # logfmt-style trace.id). First match wins; gates on

@@ -470,11 +470,20 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 	mustContain(t, out, []string{
-		// Trigger condition: JSON-looking string body.
-		`'IsString(body)'`,
-		`'IsMatch(body, "^\\s*\\{")'`,
-		// Single ParseJSON pass into per-record cache.
-		`set(cache["json"], ParseJSON(body))`,
+		// Trigger condition: JSON-looking string body. Combined into a
+		// single AND'd condition so OTTL short-circuits — calling
+		// IsMatch on a non-string body errors in OTTL rather than
+		// returning false (transform processor v0.151.0 lets the
+		// block run through that error), which is what blew up on
+		// journald entries during v0.0.1 smoke.
+		`IsString(body) and IsMatch(body, "^\\s*\\{")`,
+		// Single ParseJSON pass into per-record cache. The
+		// `where IsString(body)` guard is a defense-in-depth pin
+		// against the same OTTL block-conditions edge case: even if
+		// a future contrib version evaluated the block with a
+		// non-string body, this clause keeps ParseJSON from
+		// receiving a pcommon.Map.
+		`set(cache["json"], ParseJSON(body)) where IsString(body)`,
 		// Trace id naming conventions.
 		`cache["json"]["trace_id"]`,
 		`cache["json"]["traceId"]`,
@@ -507,7 +516,7 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 	// the (a) redacted body and (b) message attribute populated
 	// from the JSON's "msg" / "message" field.
 	redIdx := strings.Index(out, "AKIA****REDACTED****")
-	jsonIdx := strings.Index(out, `set(cache["json"], ParseJSON(body))`)
+	jsonIdx := strings.Index(out, `set(cache["json"], ParseJSON(body)) where IsString(body)`)
 	normIdx := strings.Index(out, `set(attributes["normalized_message"]`)
 	if redIdx == -1 || jsonIdx == -1 || normIdx == -1 {
 		t.Fatalf("block markers missing: redaction=%d json=%d normalized=%d", redIdx, jsonIdx, normIdx)
