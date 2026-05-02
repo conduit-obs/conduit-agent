@@ -6,7 +6,7 @@ than letting pods CrashLoopBackOff with "secret not found".
 */ -}}
 {{- if eq (include "conduit-agent.outputMode" .) "honeycomb" -}}
 {{- if and (not .Values.honeycomb.apiKey) (not .Values.honeycomb.existingSecret) -}}
-{{- fail "honeycomb.apiKey or honeycomb.existingSecret must be set when output mode is honeycomb (default). Set one via --set, or switch to a gateway egress with --set gateway.enabled=true --set gateway.endpoint=..." -}}
+{{- fail "honeycomb.apiKey or honeycomb.existingSecret must be set when output mode is honeycomb (default). Set one via --set, switch to a generic OTLP/HTTP destination with --set otlp.enabled=true --set otlp.endpoint=..., or to an OTLP/gRPC gateway with --set gateway.enabled=true --set gateway.endpoint=..." -}}
 {{- end -}}
 {{- end -}}
 apiVersion: apps/v1
@@ -122,6 +122,16 @@ spec:
             # node's mount table rather than the container's.
             - name: HOST_PROC_MOUNTINFO
               value: /hostfs/proc/self/mountinfo
+            {{- end }}
+            {{- /*
+            extraEnv is the generic injection point for vendor auth tokens
+            referenced from output.otlp.headers (e.g. DD_API_KEY for
+            Datadog OTLP intake) or any other ${env:NAME} the user threads
+            through overrides:. Each entry is rendered verbatim, so
+            secretKeyRef / configMapKeyRef / fieldRef shapes all work.
+            */ -}}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
             httpGet:

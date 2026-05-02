@@ -94,8 +94,12 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `honeycomb.apiKey` | `""` | Plain-text API key. Convenient for smoke tests; **prefer `existingSecret` in real environments.** |
 | `honeycomb.existingSecret` | `""` | Pre-created Secret holding `HONEYCOMB_API_KEY`. Wins over `apiKey`. |
 | `honeycomb.endpoint` | `https://api.honeycomb.io` | Switch to `https://api.eu1.honeycomb.io` for the EU region. |
-| `gateway.enabled` | `false` | Set true to route via a customer-operated OTLP gateway instead of Honeycomb-direct. |
+| `otlp.enabled` | `false` | Set true to route via generic OTLP/HTTP egress (Datadog, Grafana Cloud, SigNoz, AWS ADOT, in-cluster collectors, …). Wins over `honeycomb.*` when set. |
+| `otlp.endpoint` | `""` | OTLP/HTTP base URL. Required when `otlp.enabled=true`. |
+| `otlp.headers` | `{}` | HTTP headers attached to every export. Typical use: vendor auth (`DD-API-KEY`, `Authorization`, …); reference secrets via `${env:NAME}` and inject the variables through `extraEnv`. |
+| `gateway.enabled` | `false` | Set true to route via a customer-operated OTLP/gRPC gateway. Wins over both `otlp.*` and `honeycomb.*` when set. |
 | `gateway.endpoint` | `""` | OTLP/gRPC URL of the gateway. Required when `gateway.enabled=true`. |
+| `extraEnv` | `[]` | Extra env vars injected into the conduit container (verbatim under `containers[0].env`). Used to feed vendor auth tokens to `output.otlp.headers` or `overrides:`. |
 | `image.repository` | `ghcr.io/conduit-obs/conduit-agent` | OCI image (per ADR-0019). |
 | `image.tag` | `""` (falls back to `Chart.appVersion`) | Pin a specific agent build. |
 | `daemonset.resources` | `requests: 50m / 96Mi`, `limits: 500m / 384Mi` | Sized for the M5.B receiver set + k8sattributes. Bump if memory_limiter starts dropping batches. |
@@ -108,16 +112,43 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 
 ## Output mode
 
-The chart ships two egress modes, controlled by `gateway.enabled`:
+The chart ships three mutually-exclusive egress modes. Precedence:
+`gateway.enabled` > `otlp.enabled` > `honeycomb` (default).
 
-- **Honeycomb-direct (default).** OTLP/HTTP to
-  `https://api.honeycomb.io`. The `HONEYCOMB_API_KEY` env var is wired into
-  the DaemonSet via `secretKeyRef`, so the chart-rendered `conduit.yaml`
+- **Honeycomb (default, named preset).** OTLP/HTTP to
+  `https://api.honeycomb.io` with the `x-honeycomb-team` header
+  pre-wired. The `HONEYCOMB_API_KEY` env var is wired into the
+  DaemonSet via `secretKeyRef`, so the chart-rendered `conduit.yaml`
   never has the literal key embedded.
-- **Gateway.** OTLP/gRPC to a customer-operated gateway (any OTLP-capable
-  collector, including the Honeycomb Collector). Set `gateway.enabled: true`
-  and `gateway.endpoint`. TLS is required by default (ADR-0009);
-  `gateway.headers` is the place to put any gateway-specific auth.
+- **OTLP/HTTP (generic).** Any OTLP-HTTP destination Conduit doesn't
+  yet ship a named preset for — Datadog OTLP intake, Grafana Cloud OTLP,
+  SigNoz Cloud, AWS ADOT, an in-cluster collector, etc. Set
+  `otlp.enabled: true`, `otlp.endpoint`, and any auth headers the
+  vendor's docs call for. Reference secrets via `${env:NAME}` in the
+  header values and inject the variables through `extraEnv`. Example:
+
+  ```yaml
+  otlp:
+    enabled: true
+    endpoint: https://otlp.us5.datadoghq.com
+    headers:
+      DD-API-KEY: ${env:DD_API_KEY}
+
+  extraEnv:
+    - name: DD_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: datadog-otlp
+          key: api-key
+  ```
+
+- **Gateway (OTLP/gRPC).** A customer-operated gateway collector (any
+  OTLP-capable, including the Honeycomb Collector). Set
+  `gateway.enabled: true` and `gateway.endpoint`. TLS is required by
+  default (ADR-0009); `gateway.headers` is the place to put any
+  gateway-specific auth. Use this when you have a fan-out / aggregation
+  collector tier; for direct-to-vendor egress the `otlp` mode above is
+  usually what you want.
 
 ## OTLP bind address (`0.0.0.0` vs `127.0.0.1`)
 

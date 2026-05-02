@@ -62,10 +62,12 @@ nfpms:
     homepage: https://github.com/conduit-obs/conduit-agent
     maintainer: Conduit Maintainers <maintainers@conduit-obs.com>
     description: |-
-      Conduit is an Apache-2.0-licensed OpenTelemetry distribution for
-      Honeycomb. It ships an embedded OTel Collector with a curated
-      component set, vendor-neutral conduit.yaml configuration, and
-      platform default profiles for host metrics and system logs.
+      Conduit is an Apache-2.0-licensed, vendor-neutral OpenTelemetry
+      Collector distribution. It ships an embedded OTel Collector with a
+      curated component set, a high-level conduit.yaml configuration,
+      and platform default profiles for host metrics and system logs.
+      Egress is OTLP/HTTP or OTLP/gRPC to any backend; named presets
+      ship for common destinations (Honeycomb today; more on demand).
     license: Apache-2.0
     section: net
     # apk lands once preinstall.sh is portable across busybox-only systems
@@ -153,7 +155,7 @@ dockers:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Conduit OTel distribution for Honeycomb"
+      - "--label=org.opencontainers.image.description=Conduit — OpenTelemetry Collector distribution"
       - "--label=org.opencontainers.image.url=https://github.com/conduit-obs/conduit-agent"
       - "--label=org.opencontainers.image.source=https://github.com/conduit-obs/conduit-agent"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
@@ -174,7 +176,7 @@ dockers:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Conduit OTel distribution for Honeycomb"
+      - "--label=org.opencontainers.image.description=Conduit — OpenTelemetry Collector distribution"
       - "--label=org.opencontainers.image.url=https://github.com/conduit-obs/conduit-agent"
       - "--label=org.opencontainers.image.source=https://github.com/conduit-obs/conduit-agent"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"

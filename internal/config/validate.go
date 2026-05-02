@@ -76,6 +76,9 @@ func (v *validator) add(path, msg string) {
 func (v *validator) validateOutput(o *Output) {
 	switch o.Mode {
 	case OutputModeHoneycomb:
+		if o.OTLP != nil {
+			v.add("output.otlp", `must be omitted when output.mode is "honeycomb"`)
+		}
 		if o.Gateway != nil {
 			v.add("output.gateway", `must be omitted when output.mode is "honeycomb"`)
 		}
@@ -87,9 +90,27 @@ func (v *validator) validateOutput(o *Output) {
 			v.add("output.honeycomb.api_key", "required; non-empty string (may use ${env:NAME})")
 		}
 
+	case OutputModeOTLP:
+		if o.Honeycomb != nil {
+			v.add("output.honeycomb", `must be omitted when output.mode is "otlp"`)
+		}
+		if o.Gateway != nil {
+			v.add("output.gateway", `must be omitted when output.mode is "otlp"`)
+		}
+		if o.OTLP == nil {
+			v.add("output.otlp", `required when output.mode is "otlp"`)
+			return
+		}
+		if strings.TrimSpace(o.OTLP.Endpoint) == "" {
+			v.add("output.otlp.endpoint", "required; non-empty OTLP/HTTP URL (e.g. https://otlp.example.com)")
+		}
+
 	case OutputModeGateway:
 		if o.Honeycomb != nil {
 			v.add("output.honeycomb", `must be omitted when output.mode is "gateway"`)
+		}
+		if o.OTLP != nil {
+			v.add("output.otlp", `must be omitted when output.mode is "gateway"`)
 		}
 		if o.Gateway == nil {
 			v.add("output.gateway", `required when output.mode is "gateway"`)
@@ -100,10 +121,10 @@ func (v *validator) validateOutput(o *Output) {
 		}
 
 	case "":
-		v.add("output.mode", `required; one of "honeycomb" or "gateway"`)
+		v.add("output.mode", `required; one of "honeycomb", "otlp", or "gateway"`)
 
 	default:
-		v.add("output.mode", fmt.Sprintf(`unknown value %q; want one of "honeycomb" or "gateway"`, string(o.Mode)))
+		v.add("output.mode", fmt.Sprintf(`unknown value %q; want one of "honeycomb", "otlp", or "gateway"`, string(o.Mode)))
 	}
 }
 

@@ -41,7 +41,7 @@ import (
 // dev-default that exercises the right code path.
 var DefaultBuildInfo = component.BuildInfo{
 	Command:     "conduit",
-	Description: "Conduit OTel distribution for Honeycomb (V0)",
+	Description: "Conduit — OpenTelemetry Collector distribution (V0)",
 	Version:     "0.0.0-dev",
 }
 

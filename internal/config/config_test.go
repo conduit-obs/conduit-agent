@@ -91,6 +91,62 @@ output:
 	}
 }
 
+func TestParse_OTLPMinimal(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: otlp
+  otlp:
+    endpoint: https://otlp.example.com
+    headers:
+      Authorization: Bearer ${env:VENDOR_TOKEN}
+      DD-API-KEY: ${env:DD_API_KEY}
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Output.Mode != OutputModeOTLP {
+		t.Errorf("Output.Mode: got %q, want %q", cfg.Output.Mode, OutputModeOTLP)
+	}
+	if cfg.Output.OTLP == nil {
+		t.Fatal("Output.OTLP: nil")
+	}
+	if cfg.Output.OTLP.Endpoint != "https://otlp.example.com" {
+		t.Errorf("Endpoint: got %q", cfg.Output.OTLP.Endpoint)
+	}
+	if got := cfg.Output.OTLP.Headers["Authorization"]; got != "Bearer ${env:VENDOR_TOKEN}" {
+		t.Errorf("Headers[Authorization]: got %q", got)
+	}
+	if got := cfg.Output.OTLP.Headers["DD-API-KEY"]; got != "${env:DD_API_KEY}" {
+		t.Errorf("Headers[DD-API-KEY]: got %q", got)
+	}
+}
+
+func TestParse_OTLPWithCompressionAndInsecure(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: lab
+output:
+  mode: otlp
+  otlp:
+    endpoint: http://localhost:4318
+    compression: none
+    insecure: true
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Output.OTLP.Compression != "none" {
+		t.Errorf("Compression: got %q, want none", cfg.Output.OTLP.Compression)
+	}
+	if !cfg.Output.OTLP.Insecure {
+		t.Errorf("Insecure: got false, want true")
+	}
+}
+
 func TestParse_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -198,6 +254,43 @@ output:
   mode: gateway
   gateway:
     endpoint: g:4317
+  honeycomb:
+    api_key: x
+`,
+			wantPaths: []string{"output.honeycomb"},
+		},
+		{
+			name: "otlp mode missing block",
+			yaml: `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: otlp
+`,
+			wantPaths: []string{"output.otlp"},
+		},
+		{
+			name: "otlp mode missing endpoint",
+			yaml: `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: otlp
+  otlp:
+    headers:
+      foo: bar
+`,
+			wantPaths: []string{"output.otlp.endpoint"},
+		},
+		{
+			name: "otlp mode with honeycomb block",
+			yaml: `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: otlp
+  otlp:
+    endpoint: https://otlp.example.com
   honeycomb:
     api_key: x
 `,

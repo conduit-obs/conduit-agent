@@ -134,23 +134,46 @@ func (p *Profile) SystemLogsEnabled() bool {
 	return *p.SystemLogs
 }
 
-// OutputMode is the discriminator for the Output block.
+// OutputMode is the discriminator for the Output block. Three modes
+// covering three distinct intents:
+//
+//   - honeycomb: named preset for Honeycomb's OTLP/HTTP ingest. Pre-wires
+//     the x-honeycomb-team header and an endpoint default; the operator
+//     only supplies the API key. Conduit will grow more named presets as
+//     vendors prove they're worth the maintenance overhead (Datadog,
+//     Grafana Cloud, etc. — promote them out of "use otlp mode" once we
+//     have enough field signal).
+//   - otlp: generic OTLP/HTTP egress. The escape hatch for any OTLP-HTTP
+//     destination not yet covered by a named preset (Datadog OTLP intake,
+//     Grafana Cloud OTLP, SigNoz Cloud, AWS ADOT, in-cluster collectors,
+//     etc.). The operator supplies the endpoint and any required auth
+//     headers.
+//   - gateway: OTLP/gRPC egress to a customer-operated gateway collector.
+//     The mental model is "fan out / aggregate at a gateway tier", not
+//     "send directly to a vendor". gRPC is the typical wire protocol for
+//     collector-to-collector flows.
 type OutputMode string
 
 const (
-	// OutputModeHoneycomb sends OTLP/HTTP directly to Honeycomb's ingest URL.
+	// OutputModeHoneycomb sends OTLP/HTTP directly to Honeycomb's ingest
+	// URL with the x-honeycomb-team header pre-wired.
 	OutputModeHoneycomb OutputMode = "honeycomb"
+	// OutputModeOTLP sends OTLP/HTTP to an arbitrary endpoint, with
+	// caller-supplied headers for vendor auth. Use this for any
+	// OTLP-HTTP destination Conduit doesn't yet ship a named preset for.
+	OutputModeOTLP OutputMode = "otlp"
 	// OutputModeGateway sends OTLP (gRPC) to a customer-operated gateway —
 	// any OTLP-capable collector, including Honeycomb's own gateway. The
 	// gateway is responsible for downstream destinations.
 	OutputModeGateway OutputMode = "gateway"
 )
 
-// Output declares Conduit's egress. Only one nested block (Honeycomb or
-// Gateway) may be populated, and it must match Mode.
+// Output declares Conduit's egress. Exactly one nested block must be
+// populated, and it must match Mode.
 type Output struct {
 	Mode      OutputMode       `yaml:"mode"`
 	Honeycomb *HoneycombOutput `yaml:"honeycomb,omitempty"`
+	OTLP      *OTLPOutput      `yaml:"otlp,omitempty"`
 	Gateway   *GatewayOutput   `yaml:"gateway,omitempty"`
 }
 
@@ -169,6 +192,37 @@ type HoneycombOutput struct {
 
 // DefaultHoneycombEndpoint is the production US Honeycomb ingest URL.
 const DefaultHoneycombEndpoint = "https://api.honeycomb.io"
+
+// OTLPOutput configures generic OTLP/HTTP egress. Use this for any
+// OTLP-HTTP destination Conduit doesn't yet ship a named preset for —
+// Datadog (https://otlp.<site>.datadoghq.com), Grafana Cloud
+// (https://otlp-gateway-prod-<region>.grafana.net/otlp), SigNoz Cloud,
+// AWS ADOT, in-cluster collectors with HTTP receivers, etc. The vendor's
+// docs will tell you which header carries auth.
+type OTLPOutput struct {
+	// Endpoint is the OTLP/HTTP base URL. Required. Conduit appends
+	// /v1/traces, /v1/metrics, and /v1/logs at request time per the
+	// upstream otlphttp exporter convention.
+	Endpoint string `yaml:"endpoint"`
+
+	// Headers are additional HTTP headers to attach to every export.
+	// Optional; the typical use is an auth token (e.g.
+	// "Authorization: Bearer ${env:GRAFANA_CLOUD_OTLP_TOKEN}",
+	// "DD-API-KEY: ${env:DD_API_KEY}", "x-honeycomb-team: ..."). May
+	// reference environment variables via ${env:NAME}.
+	Headers map[string]string `yaml:"headers,omitempty"`
+
+	// Compression overrides the wire compression. Optional; defaults to
+	// "gzip", which every modern OTLP/HTTP receiver supports. Set to
+	// "none" only when the destination explicitly rejects compressed
+	// payloads.
+	Compression string `yaml:"compression,omitempty"`
+
+	// Insecure skips TLS verification on the egress connection. Default
+	// false. Setting this to true is a lab-only override per ADR-0009;
+	// production destinations should always present a valid certificate.
+	Insecure bool `yaml:"insecure,omitempty"`
+}
 
 // GatewayOutput configures egress to a customer-operated OTLP gateway.
 type GatewayOutput struct {

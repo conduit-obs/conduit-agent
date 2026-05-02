@@ -1,10 +1,10 @@
 # Conduit
 
-> An opinionated, Honeycomb-ready, OpenTelemetry-native agent distribution that closes the enterprise observability "familiarity gap" for Honeycomb adoption.
+> An opinionated, OpenTelemetry-native agent distribution — a familiar, batteries-included install of the upstream OTel Collector with safe defaults, platform profiles, and a Datadog-style operator experience. Vendor-neutral on egress, with a first-class Honeycomb preset.
 
-**Conduit is not the destination. Honeycomb is the destination. Conduit is the bridge.**
+**Conduit is the bridge, not the destination.** It bundles the upstream OpenTelemetry Collector with the configuration ergonomics, packaging, and platform defaults that turn `apt-get install` into "host metrics, system logs, OTLP receivers — done." Egress is OTLP/HTTP or OTLP/gRPC to whatever observability backend you operate; named presets ship for the destinations the team uses most heavily (today: Honeycomb), and a generic `output.mode: otlp` covers everyone else (Datadog, Grafana Cloud, SigNoz, AWS ADOT, in-cluster collectors, …).
 
-Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a small CLI (`conduit`) that gives enterprise platform teams a familiar, batteries-included telemetry-collection experience with safe defaults tuned for Honeycomb. It runs on Linux, Windows, Docker, and Kubernetes; emits standard OTLP; and never locks customers in at the collection layer.
+Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a small CLI (`conduit`) that gives enterprise platform teams a familiar, batteries-included telemetry-collection experience with safe defaults. It runs on Linux, macOS, Docker, and Kubernetes; emits standard OTLP; and never locks customers in at the collection layer.
 
 ## Status
 
@@ -128,8 +128,32 @@ end-to-end on a disposable kind cluster with `make kind-smoketest`. OCI
 publishing of the chart lands in M5.D; the default cluster + workload
 boards in M5.E.
 
-For values reference, RBAC plan, and gateway egress, see
-[`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).
+Send to a different backend by flipping the egress mode at install
+time:
+
+```sh
+# Generic OTLP/HTTP (Datadog OTLP intake; the same shape works for
+# Grafana Cloud, SigNoz, AWS ADOT, etc. — change endpoint + headers).
+helm install conduit deploy/helm/conduit-agent \
+  --namespace conduit \
+  --set conduit.serviceName=edge-cluster-prod \
+  --set otlp.enabled=true \
+  --set otlp.endpoint=https://otlp.us5.datadoghq.com \
+  --set 'otlp.headers.DD-API-KEY=${env:DD_API_KEY}' \
+  --set 'extraEnv[0].name=DD_API_KEY' \
+  --set 'extraEnv[0].valueFrom.secretKeyRef.name=datadog-otlp' \
+  --set 'extraEnv[0].valueFrom.secretKeyRef.key=api-key'
+
+# OTLP/gRPC to a customer-operated gateway collector.
+helm install conduit deploy/helm/conduit-agent \
+  --namespace conduit \
+  --set conduit.serviceName=edge-cluster-prod \
+  --set gateway.enabled=true \
+  --set gateway.endpoint=otel-gateway.observability.svc:4317
+```
+
+For values reference, RBAC plan, and the full egress / extraEnv guide,
+see [`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).
 
 ## Host identity (always on)
 

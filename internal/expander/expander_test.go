@@ -116,6 +116,85 @@ func TestExpandConfigs_NilCfg(t *testing.T) {
 	}
 }
 
+// otlpOutput is the OTLP/HTTP-mode counterpart to honeycomb() — same
+// profile + agent identity shape, swapping the egress block.
+func otlpOutput(p *config.Profile, otlp *config.OTLPOutput) *config.AgentConfig {
+	return &config.AgentConfig{
+		ServiceName:           "demo",
+		DeploymentEnvironment: "dev",
+		Output: config.Output{
+			Mode: config.OutputModeOTLP,
+			OTLP: otlp,
+		},
+		Profile: p,
+	}
+}
+
+// TestExpand_OTLPMode_RendersGenericExporter exercises the new generic
+// OTLP/HTTP egress (output.mode: otlp) used for vendors Conduit
+// doesn't yet ship a named preset for — Datadog OTLP intake, Grafana
+// Cloud OTLP, SigNoz, etc. The exporter id must be otlphttp/otlp (so
+// the pipeline-list lookup in newView matches), the endpoint and
+// caller-supplied headers must round-trip verbatim, and gzip
+// compression must be the unset default.
+func TestExpand_OTLPMode_RendersGenericExporter(t *testing.T) {
+	cfg := otlpOutput(&config.Profile{Mode: config.ProfileModeNone}, &config.OTLPOutput{
+		Endpoint: "https://otlp-gateway-prod-us-central-0.grafana.net/otlp",
+		Headers: map[string]string{
+			"Authorization": "Basic ${env:GRAFANA_CLOUD_OTLP_TOKEN}",
+		},
+	})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`otlphttp/otlp:`,
+		`endpoint: "https://otlp-gateway-prod-us-central-0.grafana.net/otlp"`,
+		`Authorization: "Basic ${env:GRAFANA_CLOUD_OTLP_TOKEN}"`,
+		// Default compression is gzip (rendered literally, not quoted,
+		// when the user leaves Compression empty).
+		`compression: gzip`,
+	})
+	mustNotContain(t, out, []string{
+		`otlphttp/honeycomb:`,
+		`otlp/gateway:`,
+		`x-honeycomb-team:`,
+		`tls:`,
+	})
+	for _, p := range []string{"traces", "metrics", "logs"} {
+		got := pipelineExporters(t, out, p)
+		if !equalSet(got, []string{"otlphttp/otlp", "debug"}) {
+			t.Errorf("%s pipeline exporters under otlp mode = %v; want [otlphttp/otlp debug]", p, got)
+		}
+	}
+}
+
+// TestExpand_OTLPMode_CompressionAndInsecureOverrides covers the lab-
+// style escape valves: setting compression: none for destinations that
+// reject gzip, and insecure: true to skip TLS verification (ADR-0009;
+// production destinations should always present a valid certificate).
+func TestExpand_OTLPMode_CompressionAndInsecureOverrides(t *testing.T) {
+	cfg := otlpOutput(&config.Profile{Mode: config.ProfileModeNone}, &config.OTLPOutput{
+		Endpoint:    "http://localhost:4318",
+		Compression: "none",
+		Insecure:    true,
+	})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`compression: "none"`,
+		`tls:`,
+		`insecure: true`,
+	})
+	// No headers set → no headers: block.
+	mustNotContain(t, out, []string{
+		`headers:`,
+	})
+}
+
 func TestExpand_NoProfile_OTLPOnly(t *testing.T) {
 	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
 	out, err := Expand(cfg)
@@ -713,11 +792,25 @@ func pipelineReceivers(t *testing.T, out, pipeline string) []string {
 // "processors: [a, b, c]" line of a single pipeline section.
 func pipelineProcessors(t *testing.T, out, pipeline string) []string {
 	t.Helper()
+	return inlineList(t, out, pipeline, "      processors:")
+}
+
+// pipelineExporters extracts the exporter IDs from the inline
+// "exporters: [a, b]" line of a single pipeline section.
+func pipelineExporters(t *testing.T, out, pipeline string) []string {
+	t.Helper()
+	return inlineList(t, out, pipeline, "      exporters:")
+}
+
+// inlineList extracts an inline YAML list ([a, b, c]) from the line that
+// starts with prefix inside the given pipeline section. Used by the
+// pipeline{Processors,Exporters} helpers above.
+func inlineList(t *testing.T, out, pipeline, prefix string) []string {
+	t.Helper()
 	body := pipelineSection(t, out, pipeline)
-	const prefix = "      processors:"
 	pIdx := strings.Index(body, prefix)
 	if pIdx == -1 {
-		t.Fatalf("processors: not found in %s pipeline; body:\n%s", pipeline, body)
+		t.Fatalf("%q not found in %s pipeline; body:\n%s", prefix, pipeline, body)
 	}
 	line := body[pIdx:]
 	if nl := strings.Index(line, "\n"); nl != -1 {
@@ -726,7 +819,7 @@ func pipelineProcessors(t *testing.T, out, pipeline string) []string {
 	openBracket := strings.Index(line, "[")
 	closeBracket := strings.Index(line, "]")
 	if openBracket == -1 || closeBracket == -1 || closeBracket <= openBracket {
-		t.Fatalf("processors line not in [a, b] form: %q", line)
+		t.Fatalf("%s line not in [a, b] form: %q", prefix, line)
 	}
 	parts := strings.Split(line[openBracket+1:closeBracket], ",")
 	ids := make([]string, 0, len(parts))

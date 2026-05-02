@@ -82,13 +82,18 @@ pinned agent build.
 {{- end -}}
 
 {{/*
-Output mode (honeycomb | gateway). gateway.enabled wins when set so a
-single --set flag is enough to flip a release between Honeycomb-direct
-and a customer-operated gateway.
+Output mode (honeycomb | otlp | gateway). Precedence: gateway > otlp >
+honeycomb (default). One --set flag flips a release between paths.
+The conduit binary's validator rejects any combination where the picked
+mode's nested block is missing or empty, so the configmap template
+below relies on this resolution being self-consistent with the values
+that fed it.
 */}}
 {{- define "conduit-agent.outputMode" -}}
 {{- if .Values.gateway.enabled -}}
 gateway
+{{- else if and .Values.otlp .Values.otlp.enabled -}}
+otlp
 {{- else -}}
 honeycomb
 {{- end -}}

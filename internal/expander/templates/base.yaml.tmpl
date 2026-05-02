@@ -138,6 +138,20 @@ exporters:
     headers:
       x-honeycomb-team: {{ .Output.Honeycomb.APIKey | q }}
     compression: gzip
+{{- else if eq .Output.Mode "otlp" }}
+  otlphttp/otlp:
+    endpoint: {{ .Output.OTLP.Endpoint | q }}
+{{- if .Output.OTLP.Headers }}
+    headers:
+{{- range $k, $v := .Output.OTLP.Headers }}
+      {{ $k }}: {{ $v | q }}
+{{- end }}
+{{- end }}
+    compression: {{ if .Output.OTLP.Compression }}{{ .Output.OTLP.Compression | q }}{{ else }}gzip{{ end }}
+{{- if .Output.OTLP.Insecure }}
+    tls:
+      insecure: true
+{{- end }}
 {{- else if eq .Output.Mode "gateway" }}
   otlp/gateway:
     endpoint: {{ .Output.Gateway.Endpoint | q }}

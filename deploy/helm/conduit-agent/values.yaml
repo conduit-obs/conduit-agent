@@ -10,8 +10,16 @@
 # Kubernetes metadata enrichment.
 
 # ---------------------------------------------------------------------------
-# Honeycomb output. Required for the default values; switch to `gateway`
-# below if you operate your own OTLP gateway.
+# Output / egress. Three mutually-exclusive paths in order of precedence:
+#
+#   gateway.enabled=true → output.mode=gateway (OTLP/gRPC to your own
+#                          collector tier; ignores honeycomb / otlp blocks)
+#   otlp.enabled=true    → output.mode=otlp    (generic OTLP/HTTP to any
+#                          vendor with caller-supplied auth headers —
+#                          Datadog, Grafana Cloud, SigNoz, AWS ADOT, etc.;
+#                          ignores honeycomb block)
+#   default              → output.mode=honeycomb (named preset, requires
+#                          honeycomb.apiKey or honeycomb.existingSecret)
 # ---------------------------------------------------------------------------
 honeycomb:
   # Set ONE of apiKey or existingSecret. If both are set, existingSecret wins.
@@ -35,11 +43,37 @@ honeycomb:
   # (https://api.eu1.honeycomb.io) or sandboxes.
   endpoint: https://api.honeycomb.io
 
-# Switch the egress to a customer-operated OTLP gateway instead of
-# Honeycomb-direct. When enabled, honeycomb.apiKey / existingSecret are
-# ignored. The gateway path mirrors output.mode=gateway in conduit.yaml
-# (TLS-required by default per ADR-0009; insecure: true documented as a
-# warning-level opt-out for lab use).
+# Generic OTLP/HTTP egress for any vendor that isn't yet a named preset.
+# When enabled, honeycomb.* is ignored. Set the endpoint and any auth
+# headers the vendor's docs call for; common patterns:
+#
+#   Datadog:        endpoint: https://otlp.<site>.datadoghq.com
+#                   headers: { DD-API-KEY: "${env:DD_API_KEY}" }
+#   Grafana Cloud:  endpoint: https://otlp-gateway-prod-<region>.grafana.net/otlp
+#                   headers: { Authorization: "Basic ${env:GRAFANA_CLOUD_OTLP_TOKEN}" }
+#   In-cluster:     endpoint: http://my-otlp-collector.observability.svc:4318
+#                   insecure: true   # lab-only per ADR-0009
+otlp:
+  enabled: false
+  endpoint: ""
+  # headers map onto output.otlp.headers in conduit.yaml. Reference
+  # secrets via ${env:NAME} and feed them in through extraEnv (or the
+  # Secret approach used for honeycomb above).
+  headers: {}
+  # Override gzip when the destination explicitly rejects compressed
+  # payloads. Empty = upstream default (gzip).
+  compression: ""
+  # Skip TLS verification on the egress connection. Lab-only; production
+  # destinations should always present a valid certificate.
+  insecure: false
+
+# Switch the egress to a customer-operated OTLP/gRPC gateway. When
+# enabled, honeycomb.* and otlp.* are ignored. The gateway path mirrors
+# output.mode=gateway in conduit.yaml (TLS-required by default per
+# ADR-0009; insecure: true documented as a warning-level opt-out for
+# lab use). Use this when you have a fan-out / aggregation collector
+# tier; for direct-to-vendor egress, the otlp block above is usually
+# what you want.
 gateway:
   enabled: false
   endpoint: ""
@@ -74,6 +108,25 @@ conduit:
   #
   # Valid values: auto | linux | darwin | docker | k8s | none.
   profileMode: k8s
+
+# ---------------------------------------------------------------------------
+# Extra environment variables injected into the conduit container. The
+# typical use is feeding vendor auth tokens to output.otlp.headers or to
+# overrides:, where the rendered conduit.yaml references them via
+# ${env:NAME}. Each entry is rendered verbatim under .containers[0].env,
+# so any of value / valueFrom.secretKeyRef / valueFrom.configMapKeyRef /
+# valueFrom.fieldRef shapes work.
+#
+# Example — Datadog OTLP egress with the API key in an existing Secret:
+#
+#   extraEnv:
+#     - name: DD_API_KEY
+#       valueFrom:
+#         secretKeyRef:
+#           name: datadog-otlp
+#           key: api-key
+# ---------------------------------------------------------------------------
+extraEnv: []
 
 # ---------------------------------------------------------------------------
 # Image. Multi-arch manifest tags published by goreleaser per ADR-0019.

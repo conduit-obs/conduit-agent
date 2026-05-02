@@ -14,7 +14,9 @@ const long = `Generate synthetic OTLP traces, metrics, and logs that match Condu
 RED dimension model and resource enrichment expectations.
 
 Used by conduit doctor smoke tests, the 30-minute demo, and CI E2E tests
-against a Honeycomb sandbox.
+against whichever observability backend the configured output mode
+points at (Honeycomb sandboxes today; otlp / gateway destinations once
+those code paths land in M10).
 
 In M1 this is a stub. Real behavior lands by M10.`
 

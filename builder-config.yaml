@@ -23,7 +23,7 @@
 
 dist:
   name: conduit
-  description: Conduit OTel distribution for Honeycomb (V0)
+  description: Conduit — OpenTelemetry Collector distribution (V0)
   module: github.com/conduit-obs/conduit-agent-ocb-output
   version: 0.0.0-dev
   output_path: ./build/collector

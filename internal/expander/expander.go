@@ -203,6 +203,8 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 	switch cfg.Output.Mode {
 	case config.OutputModeHoneycomb:
 		v.ExporterName = "otlphttp/honeycomb"
+	case config.OutputModeOTLP:
+		v.ExporterName = "otlphttp/otlp"
 	case config.OutputModeGateway:
 		v.ExporterName = "otlp/gateway"
 	default:

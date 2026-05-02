@@ -25,7 +25,9 @@ The command:
   4. starts the embedded collector, blocking until SIGINT / SIGTERM
 
 The collector listens for OTLP on :4317 (gRPC) and :4318 (HTTP) and exports
-to Honeycomb or a customer gateway depending on output.mode.
+to whatever destination output.mode selects: the Honeycomb named preset
+(honeycomb), generic OTLP/HTTP to any vendor (otlp), or OTLP/gRPC to a
+customer-operated gateway (gateway).
 
 Note: --log-level is parsed but not yet wired through to the embedded
 collector; that lands in M3 along with the structured logging story.`

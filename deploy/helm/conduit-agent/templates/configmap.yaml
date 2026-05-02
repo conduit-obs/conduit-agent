@@ -15,11 +15,26 @@ data:
     deployment_environment: {{ .Values.conduit.deploymentEnvironment | default "production" | quote }}
 
     output:
-    {{- if eq (include "conduit-agent.outputMode" .) "honeycomb" }}
+    {{- $mode := include "conduit-agent.outputMode" . }}
+    {{- if eq $mode "honeycomb" }}
       mode: honeycomb
       honeycomb:
         api_key: ${env:HONEYCOMB_API_KEY}
         endpoint: {{ .Values.honeycomb.endpoint | default "https://api.honeycomb.io" | quote }}
+    {{- else if eq $mode "otlp" }}
+      mode: otlp
+      otlp:
+        endpoint: {{ required "otlp.endpoint is required when otlp.enabled=true" .Values.otlp.endpoint | quote }}
+        {{- with .Values.otlp.headers }}
+        headers:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- if .Values.otlp.compression }}
+        compression: {{ .Values.otlp.compression | quote }}
+        {{- end }}
+        {{- if .Values.otlp.insecure }}
+        insecure: true
+        {{- end }}
     {{- else }}
       mode: gateway
       gateway:
