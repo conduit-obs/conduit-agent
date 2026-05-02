@@ -8,7 +8,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 
 ## Status
 
-**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), M6 (source-side; signing + Windows Server smoke test gated on M12 CI), M8, and M9 done.**
+**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), M6 (source-side; signing + Windows Server smoke test gated on M12 CI), M7, M8, and M9 done.**
 
 | Step | Scope | Status |
 |---|---|---|
@@ -36,6 +36,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M6.B** | Windows service entry point in [`cmd/run/run_windows.go`](cmd/run/run_windows.go): `golang.org/x/sys/windows/svc.Run` dispatch when started by the Service Control Manager, foreground Ctrl+C fallback for interactive use, SCM Stop / Shutdown translated to context cancellation. [`cmd/run/run_unix.go`](cmd/run/run_unix.go) keeps the existing SIGINT / SIGTERM path. Both expose the same `runWithLifecycle` signature. | done |
 | **M6.C** | Windows MSI assets: WiX 3.x source ([`deploy/windows/wix/conduit.wxs`](deploy/windows/wix/conduit.wxs)) with `<ServiceInstall Start="auto">` + `<util:ServiceConfig FirstFailureActionType="restart">` and `NeverOverwrite="yes"` on `conduit.yaml` / `conduit.env`; default config + env at [`deploy/windows/`](deploy/windows/README.md); unattended [`install.ps1`](deploy/windows/scripts/install.ps1) (downloads the release MSI, sets the per-service registry `Environment`, restarts the service, probes `:13133/`); [`uninstall.ps1`](deploy/windows/scripts/uninstall.ps1); goreleaser `msi:` block in [`.goreleaser.yaml`](.goreleaser.yaml). | done (signing + Windows-runner CI deferred to M12) |
 | **M6.D** | [`dashboards/windows-host-overview.json`](dashboards/windows-host-overview.json) — two-half narrative (per-host resource pressure with **CPU Queue Length** as the saturation indicator instead of Unix load average; **Windows Event Log** narrative organized around `winlog.channel` + `winlog.provider_name` + `winlog.event_id` — the columns Windows admins actually query). Severity panels use OTel `severity_text` so cross-platform severity dashboards work without a Windows-specific case. | done |
+| **M7** | AWS deployment recipes under [`docs/deploy/aws/`](docs/deploy/aws/README.md): [`ec2.md`](docs/deploy/aws/ec2.md) (systemd + IAM instance profile + SSM Parameter Store + Terraform module), [`ecs.md`](docs/deploy/aws/ecs.md) (sidecar pattern, Fargate-compatible task def with `dependsOn: HEALTHY`, Secrets Manager / Parameter Store via `secrets:`), [`eks.md`](docs/deploy/aws/eks.md) (Helm chart + IRSA via `eksctl create iamserviceaccount`, `extraInitContainers` resolving the API key into a tmpfs volume), [`lambda.md`](docs/deploy/aws/lambda.md) (explicit non-deliverable — use the upstream OTel Lambda Layer; covers what Conduit *does* fit into for Lambda workloads). Every recipe includes least-privilege IAM, a `conduit doctor` validation step (with manual fallback until M11), and Honeycomb US / EU endpoint variations. | done |
 
 M5 ships in slices, mirroring the Linux / Docker pattern: M5.A was the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wired the **kubelet / container-log / `k8sattributes` defaults**, M5.C added **RBAC + host bind mounts** so those receivers actually have access to what they need plus the kind smoke recipe to prove it, M5.D landed the **chart packaging + OCI publishing recipe** with cosign signing, and M5.E ships [`dashboards/k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — a pod-keyed, namespace-scoped board with a six-section narrative (Cluster shape → Compute absolute → Compute relative to limits → Network → Filesystem → Logs) — plus the small additive set of opt-in `kubeletstats` metrics the board needs. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
@@ -164,6 +165,38 @@ helm install conduit deploy/helm/conduit-agent \
 
 For values reference, RBAC plan, and the full egress / extraEnv guide,
 see [`deploy/helm/conduit-agent/README.md`](deploy/helm/conduit-agent/README.md).
+
+## Deploy on AWS
+
+Recipes for the four AWS shapes that cover ~95% of customer
+conversations live under [`docs/deploy/aws/`](docs/deploy/aws/README.md):
+
+- [`ec2.md`](docs/deploy/aws/ec2.md) — Conduit as a systemd unit on a
+  Linux EC2 instance, with the Honeycomb ingest key resolved from SSM
+  Parameter Store via an IAM instance profile (no API keys baked into
+  AMIs or user-data scripts). Includes a Terraform module covering the
+  launch template + IAM wiring for Auto Scaling Groups.
+- [`ecs.md`](docs/deploy/aws/ecs.md) — Conduit as a sidecar container
+  in an ECS task (Fargate or EC2 launch type). Two-container task def
+  with `dependsOn: HEALTHY` so the app waits for the sidecar; secrets
+  resolved at task-start via the `secrets:` block against Secrets
+  Manager (or Parameter Store).
+- [`eks.md`](docs/deploy/aws/eks.md) — the M5 Helm chart on EKS with
+  IRSA via `eksctl create iamserviceaccount`; an `extraInitContainers`
+  block resolves the API key into a tmpfs volume so it stays out of
+  `kubectl describe` output.
+- [`lambda.md`](docs/deploy/aws/lambda.md) — explicit non-deliverable
+  with the rationale ("use the upstream OTel Lambda Layer; it's
+  shaped for the runtime"), the right Honeycomb-shaped collector
+  config to deploy alongside the upstream layer, and where Conduit
+  *does* still fit (Refinery in front of Honeycomb at M10; gateway-
+  mode egress for VPC-restricted Lambdas).
+
+Every recipe ships least-privilege IAM (no `ec2:` / `s3:` /
+`cloudwatch:` permissions — Conduit egress is OTLP/HTTPS to
+Honeycomb, not via AWS APIs), pinned-release-version bootstraps,
+and a `conduit doctor` validation step (M11) with a manual
+`curl :13133/` + log-tail fallback that works today.
 
 ## Host identity (always on)
 
