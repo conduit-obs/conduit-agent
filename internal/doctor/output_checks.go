@@ -276,12 +276,12 @@ func dialTarget(ctx context.Context, t endpointTarget) string {
 	if err != nil {
 		return fmt.Sprintf("TCP connect to %s failed: %v", t.display, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if !t.useTLS {
 		return ""
 	}
 	tlsConn := tls.Client(conn, &tls.Config{ServerName: t.host})
-	defer tlsConn.Close()
+	defer func() { _ = tlsConn.Close() }()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return fmt.Sprintf("TLS handshake to %s failed: %v", t.display, err)
 	}

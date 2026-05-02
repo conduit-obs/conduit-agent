@@ -1,0 +1,39 @@
+# Force LF line endings for all text files at checkout time, regardless
+# of the host's `core.autocrlf` setting. The rendered upstream OTel
+# Collector YAML produced by the expander is byte-identical across
+# platforms — having the templates checked out with CRLF on Windows
+# (the historical default for `core.autocrlf=true`) used to make
+# `pipelineSection` lookups (which anchor on literal "\n") and the
+# `TestExpand_Goldens` byte diff fail on the windows-latest CI runner
+# while passing everywhere else.
+#
+# `text=auto` lets git keep doing its content-based binary detection
+# (so .png, .ico, etc. are not corrupted by line-ending rewrites);
+# `eol=lf` pins the line ending for everything that is text.
+* text=auto eol=lf
+
+# Belt-and-suspenders: explicit LF for the source surfaces the
+# expander, builder, and packagers actually read. Even if a stray
+# `core.autocrlf=true` somehow overrides the catch-all above, these
+# remain LF.
+*.go             text eol=lf
+*.tmpl           text eol=lf
+*.yaml           text eol=lf
+*.yml            text eol=lf
+*.json           text eol=lf
+*.md             text eol=lf
+*.sh             text eol=lf
+Makefile         text eol=lf
+
+# Windows-native tooling that genuinely wants CRLF.
+*.ps1            text eol=crlf
+*.bat            text eol=crlf
+*.cmd            text eol=crlf
+
+# Binary assets: opt out of any line-ending rewriting.
+*.png            binary
+*.jpg            binary
+*.jpeg           binary
+*.ico            binary
+*.gif            binary
+*.pdf            binary

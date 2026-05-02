@@ -63,7 +63,7 @@ func runGoldenCase(t *testing.T, name string) {
 	if err != nil {
 		t.Fatalf("open %s: %v", inputPath, err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	cfg, err := config.Parse(in)
 	if err != nil {
 		t.Fatalf("parse %s: %v", inputPath, err)
@@ -95,10 +95,15 @@ func runGoldenCase(t *testing.T, name string) {
 
 // normalizeRenderedYAML strips trailing whitespace + collapses
 // multiple blank lines so byte-identical comparisons aren't
-// derailed by editor reflows. The semantic content is what we
-// care about; whitespace at end-of-file or trailing-spaces on a
-// commented line are noise.
+// derailed by editor reflows or CRLF line endings. The semantic
+// content is what we care about; whitespace at end-of-file,
+// trailing-spaces on a commented line, and Windows-style \r\n
+// (which can appear when the runner has core.autocrlf=true and
+// .gitattributes hasn't taken effect on a stale checkout) are
+// noise.
 func normalizeRenderedYAML(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "")
 	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
 	for _, ln := range lines {

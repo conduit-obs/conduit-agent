@@ -191,7 +191,7 @@ func TestRun_HumanGroupsByseverity(t *testing.T) {
 		t.Fatalf("expected all severities to appear; got:\n%s", out)
 	}
 	// Order: FAIL first, then WARN, then PASS.
-	if !(failIdx < warnIdx && warnIdx < passIdx) {
+	if failIdx >= warnIdx || warnIdx >= passIdx {
 		t.Errorf("expected FAIL < WARN < PASS in output order; failIdx=%d warnIdx=%d passIdx=%d\n%s",
 			failIdx, warnIdx, passIdx, out)
 	}

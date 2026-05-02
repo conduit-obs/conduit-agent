@@ -44,7 +44,7 @@ func TestHas(t *testing.T) {
 		{"k8s", SignalHostMetrics, true},
 		{"k8s", SignalKubelet, true},
 		{"k8s", SignalSystemLogs, true},
-		// kubelet is k8s-only; host platforms have no analogue.
+		// kubelet is k8s-only; host platforms have no analog.
 		{"linux", SignalKubelet, false},
 		{"darwin", SignalKubelet, false},
 		// docker has no system-logs / kubelet fragments; M9.A ships

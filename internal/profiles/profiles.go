@@ -41,7 +41,7 @@ const (
 	// holds filelog/k8s rather than journald.
 	SignalSystemLogs Signal = "logs"
 	// SignalKubelet is the kubeletstatsreceiver fragment. Only the k8s
-	// platform ships it today; host platforms have no analogue.
+	// platform ships it today; host platforms have no analog.
 	SignalKubelet Signal = "kubelet"
 )
 

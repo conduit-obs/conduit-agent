@@ -80,7 +80,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		if rendered, rerr := expander.Expand(cfg); rerr == nil {
 			bctx.RenderedYAML = rendered
 		} else {
-			fmt.Fprintf(cmd.ErrOrStderr(),
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 				"doctor: warning: render failed (%v); receiver.permissions will be skipped.\n", rerr)
 		}
 	}

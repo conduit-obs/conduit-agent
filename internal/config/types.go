@@ -478,14 +478,14 @@ var REDDefaultHistogramBuckets = []string{
 //   - http.path / http.target: usually contains IDs (vs http.route which
 //     is the templated form)
 var REDDimensionDenylist = map[string]string{
-	"trace_id":     "per-request unique; tracks every individual request — use http.route for endpoint-level grouping",
-	"span_id":      "per-span unique; not meaningful as a dimension",
-	"request_id":   "per-request unique",
-	"user.id":      "per-user unique; cardinality scales with user count",
-	"customer_id":  "per-customer unique; cardinality scales with customer count",
-	"tenant_id":    "per-tenant unique; cardinality scales with tenant count",
-	"url.full":     "includes query string + fragment; varies per call",
-	"http.url":     "deprecated alias for url.full",
-	"http.path":    "usually contains IDs; use http.route for the templated form",
-	"http.target":  "usually contains IDs; use http.route for the templated form",
+	"trace_id":    "per-request unique; tracks every individual request — use http.route for endpoint-level grouping",
+	"span_id":     "per-span unique; not meaningful as a dimension",
+	"request_id":  "per-request unique",
+	"user.id":     "per-user unique; cardinality scales with user count",
+	"customer_id": "per-customer unique; cardinality scales with customer count",
+	"tenant_id":   "per-tenant unique; cardinality scales with tenant count",
+	"url.full":    "includes query string + fragment; varies per call",
+	"http.url":    "deprecated alias for url.full",
+	"http.path":   "usually contains IDs; use http.route for the templated form",
+	"http.target": "usually contains IDs; use http.route for the templated form",
 }

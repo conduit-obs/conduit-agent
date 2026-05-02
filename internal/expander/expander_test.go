@@ -274,7 +274,7 @@ func TestExpand_DarwinProfile_NoJournald(t *testing.T) {
 	})
 	mustNotContain(t, out, []string{
 		`journald:`,
-		`processes:`,    // darwin scraper list omits this
+		`processes:`, // darwin scraper list omits this
 	})
 
 	if got := pipelineReceivers(t, out, "logs"); !contains(got, "filelog/system") {
@@ -453,17 +453,17 @@ func TestExpand_HostMetrics_EnablesUtilizationMetrics(t *testing.T) {
 //
 // The test asserts:
 //
-//   1. The block sits between redaction (M9.B) and normalized_message
-//      so it sees redacted JSON and can populate attributes["message"]
-//      for the normalized_message block to consume.
-//   2. Three trace_id naming conventions and three span_id naming
-//      conventions are handled.
-//   3. Empty-string gates protect SDK-set values from being
-//      overwritten — checked by looking for the
-//      `trace_id.string == ""` predicate.
-//   4. The five-level severity_number mapping covers
-//      trace/debug/info/warn/error/fatal with the documented
-//      regex aliases (info/informational, warn/warning, etc.).
+//  1. The block sits between redaction (M9.B) and normalized_message
+//     so it sees redacted JSON and can populate attributes["message"]
+//     for the normalized_message block to consume.
+//  2. Three trace_id naming conventions and three span_id naming
+//     conventions are handled.
+//  3. Empty-string gates protect SDK-set values from being
+//     overwritten — checked by looking for the
+//     `trace_id.string == ""` predicate.
+//  4. The five-level severity_number mapping covers
+//     trace/debug/info/warn/error/fatal with the documented
+//     regex aliases (info/informational, warn/warning, etc.).
 func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
 	if err != nil {
@@ -512,7 +512,7 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 	if redIdx == -1 || jsonIdx == -1 || normIdx == -1 {
 		t.Fatalf("block markers missing: redaction=%d json=%d normalized=%d", redIdx, jsonIdx, normIdx)
 	}
-	if !(redIdx < jsonIdx && jsonIdx < normIdx) {
+	if redIdx >= jsonIdx || jsonIdx >= normIdx {
 		t.Errorf("expected redaction(%d) < json(%d) < normalized(%d)", redIdx, jsonIdx, normIdx)
 	}
 }
@@ -523,14 +523,14 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 // AKIA-prefixed AWS access key ids, JWTs, and a small set of
 // case-insensitive credential key=value patterns. This test locks in:
 //
-//   1. The redaction block precedes the normalized_message block in
-//      the rendered YAML so the latter sees redacted input (otherwise
-//      a user grouping by normalized_message would still see
-//      plaintext credentials in the data).
-//   2. Every documented pattern is present.
-//   3. The operator-facing replacement string ("****REDACTED****") is
-//      stable so downstream queries can detect "this record was
-//      redacted by Conduit" without parsing the original pattern.
+//  1. The redaction block precedes the normalized_message block in
+//     the rendered YAML so the latter sees redacted input (otherwise
+//     a user grouping by normalized_message would still see
+//     plaintext credentials in the data).
+//  2. Every documented pattern is present.
+//  3. The operator-facing replacement string ("****REDACTED****") is
+//     stable so downstream queries can detect "this record was
+//     redacted by Conduit" without parsing the original pattern.
 func TestExpand_TransformLogs_DefaultRedactionBlock(t *testing.T) {
 	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
 	if err != nil {
@@ -678,7 +678,7 @@ func TestExpand_DockerProfile_HostMetricsDisabled(t *testing.T) {
 // Windows (M6.A) ships hostmetrics + Windows Event Log (Application +
 // System channels). Hostmetrics has the same shape as the linux fragment
 // — same scrapers, same *.utilization opt-ins — so dashboards keyed on
-// `system.*` work cross-platform; the Windows-specific load behaviour
+// `system.*` work cross-platform; the Windows-specific load behavior
 // (Processor Queue Length surfaced as system.cpu.load_average.1m) is
 // the receiver's responsibility, not the fragment's. The Security
 // Event Log channel is intentionally NOT loaded by default
@@ -1205,7 +1205,7 @@ func TestExpand_RED_UserDimensionsAppended(t *testing.T) {
 		`- name: deployment.environment`, // default still there
 		`- name: db.system`,              // user add
 		`- name: feature.flag.key`,
-		`- service.namespace`,            // user resource add
+		`- service.namespace`, // user resource add
 		`- team.tier`,
 		`aggregation_cardinality_limit: 10000`, // user-overridden cap
 	})
@@ -1322,6 +1322,13 @@ func TestExpand_UnknownMode(t *testing.T) {
 // "transform/logs:" don't mislead the lookup.
 func pipelineSection(t *testing.T, out, pipeline string) string {
 	t.Helper()
+	// Defense in depth for the windows-latest CI runner: if a stale
+	// checkout (no .gitattributes yet) handed the renderer CRLF
+	// templates, the rendered output here will be CRLF-terminated
+	// and our literal "\n"-anchored lookups below would all whiff.
+	// Normalize once so the helpers stay byte-honest for the common
+	// case while tolerating the odd one.
+	out = strings.ReplaceAll(out, "\r\n", "\n")
 	// Anchor the search inside the `service.pipelines:` block so a
 	// receiver-level `metrics:` enable-list (e.g. kubeletstats's
 	// `metrics: { container.uptime: { enabled: true }, ... }`) does

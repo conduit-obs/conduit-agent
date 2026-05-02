@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -198,7 +199,7 @@ func TestCheckReceiverPorts_DetectsHeldPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 
 	r := probePort("127.0.0.1", port)
@@ -231,6 +232,14 @@ func TestCheckReceiverPermissions_ReadablePathsPass(t *testing.T) {
 // CDT0202: an unreadable filelog path (mode 0000) surfaces a FAIL
 // with the path embedded so the operator can fix permissions.
 func TestCheckReceiverPermissions_UnreadablePathFails(t *testing.T) {
+	// Windows ignores the Unix mode bits we hand to os.WriteFile, so
+	// a "0000" file is still readable to the running process. The
+	// permissions check itself is real and shipped on Windows (see
+	// internal/doctor/checks.go); this particular failure-path test
+	// just can't be staged with chmod on that platform.
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix mode bits don't restrict reads on Windows; permissions check exercised by other tests")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("running as root; mode-0000 file is still readable")
 	}

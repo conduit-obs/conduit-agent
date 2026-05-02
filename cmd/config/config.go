@@ -52,7 +52,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		if _, err := cfg.Load(path); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s: valid\n", path)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: valid\n", path)
 		return nil
 	default:
 		return errors.New("config: pass --validate (or --print-schema once implemented); see --help")

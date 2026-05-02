@@ -488,7 +488,7 @@ func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 	case config.ProfileModeAuto, "":
 		detected := profiles.DetectPlatform()
 		if detected == "" && warnW != nil {
-			fmt.Fprintf(warnW,
+			_, _ = fmt.Fprintf(warnW,
 				"conduit: profile.mode=auto on %s but Conduit ships no profile for this OS; falling back to OTLP-only. Set profile.mode=none to silence.\n",
 				runtime.GOOS)
 		}
@@ -496,7 +496,7 @@ func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 	default:
 		// Validation would have caught this; treat as none defensively.
 		if warnW != nil {
-			fmt.Fprintf(warnW, "conduit: unknown profile.mode %q; falling back to OTLP-only\n", string(p.Mode))
+			_, _ = fmt.Fprintf(warnW, "conduit: unknown profile.mode %q; falling back to OTLP-only\n", string(p.Mode))
 		}
 		return ""
 	}

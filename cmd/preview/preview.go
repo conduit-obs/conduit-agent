@@ -116,7 +116,7 @@ func printREDProjection(w io.Writer, cfg *config.AgentConfig) {
 	}
 	red := cfg.Metrics.RED
 	if !red.REDEnabled() {
-		fmt.Fprintln(w, "conduit: RED metrics from spans: disabled (metrics.red.enabled=false)")
+		_, _ = fmt.Fprintln(w, "conduit: RED metrics from spans: disabled (metrics.red.enabled=false)")
 		return
 	}
 	spanDims := append(append([]string{}, config.REDDefaultSpanDimensions...), red.SpanDimensions...)
@@ -125,8 +125,8 @@ func printREDProjection(w io.Writer, cfg *config.AgentConfig) {
 	if limit == 0 {
 		limit = config.DefaultREDCardinalityLimit
 	}
-	fmt.Fprintf(w, "conduit: RED metrics from spans: enabled (cardinality_limit=%d, span dims=%d, resource dims=%d)\n",
+	_, _ = fmt.Fprintf(w, "conduit: RED metrics from spans: enabled (cardinality_limit=%d, span dims=%d, resource dims=%d)\n",
 		limit, len(spanDims), len(resDims))
-	fmt.Fprintf(w, "  span dimensions:     [%s]\n", strings.Join(spanDims, ", "))
-	fmt.Fprintf(w, "  resource dimensions: [%s]\n", strings.Join(resDims, ", "))
+	_, _ = fmt.Fprintf(w, "  span dimensions:     [%s]\n", strings.Join(spanDims, ", "))
+	_, _ = fmt.Fprintf(w, "  resource dimensions: [%s]\n", strings.Join(resDims, ", "))
 }

@@ -483,6 +483,13 @@ overrides:
 	}
 }
 
+// The YAML literal below intentionally misspells "receivers" as
+// "reciever" — the whole point of this test is verifying the
+// validator surfaces unknown top-level override keys verbatim.
+// Suppress the misspell linter for this function so that intent
+// stays first-class instead of going through a workaround.
+//
+//nolint:misspell
 func TestParse_OverridesUnknownTopLevelKey(t *testing.T) {
 	const yaml = `
 service_name: demo
