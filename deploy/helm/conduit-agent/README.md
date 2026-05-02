@@ -2,15 +2,17 @@
 
 DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
 
-> **Status — M5.A/B/C complete.** The chart ships the DaemonSet, ConfigMap,
-> ServiceAccount, Service, optional Secret, and ClusterRole +
+> **Status — M5.A through M5.D complete.** The chart ships the DaemonSet,
+> ConfigMap, ServiceAccount, Service, optional Secret, and ClusterRole +
 > ClusterRoleBinding. Default `profile.mode: k8s` ships per-node
 > `hostmetrics` (rooted at `/hostfs` via the chart bind mount),
 > `kubeletstats` against the local kubelet, `filelog/k8s` for
 > `/var/log/pods/*`, and the `k8sattributes` processor on every pipeline.
-> Chart publishing to `oci://ghcr.io/conduit-obs/charts/conduit-agent`
-> lands in M5.D; the default cluster + workload boards in M5.E. A kind
-> smoke recipe lives in the repo root `Makefile` (`make kind-smoketest`).
+> Publishing recipe (`make helm-publish`) packages, pushes, and signs
+> the chart against `oci://ghcr.io/conduit-obs/charts/conduit-agent` —
+> the first published release happens with v0.0.1. The default cluster +
+> workload boards land in M5.E. A kind smoke recipe lives in the repo
+> root `Makefile` (`make kind-smoketest`).
 
 ## What you get
 
@@ -69,18 +71,68 @@ curl -X POST http://conduit-conduit-agent.conduit:4318/v1/traces \
   -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"smoketest"}}]},"scopeSpans":[{"spans":[{"traceId":"01020304050607080102030405060708","spanId":"0102030405060708","name":"smoke","startTimeUnixNano":1,"endTimeUnixNano":2}]}]}]}'
 ```
 
-## Install (post-M5.D — OCI)
+## Install (OCI registry)
 
-Once M5.D wires goreleaser to push the chart, the steady-state install
-recipe will be:
+Once a chart version has been published (the recipe is in place; the
+first publish happens with v0.0.1):
 
 ```bash
 helm install conduit oci://ghcr.io/conduit-obs/charts/conduit-agent \
-  --version 0.1.x \
+  --version 0.0.1 \
   --namespace conduit --create-namespace \
   --set conduit.serviceName=edge-cluster-prod \
   --set honeycomb.existingSecret=conduit-honeycomb
 ```
+
+### Verifying the signature
+
+The publishing recipe signs each packaged chart with cosign keyless
+OIDC (the GitHub Actions OIDC issuer); signatures and certificates are
+attached as separate artifacts. To verify a downloaded chart against
+the transparency log:
+
+```bash
+helm pull oci://ghcr.io/conduit-obs/charts/conduit-agent --version 0.0.1
+# → conduit-agent-0.0.1.tgz
+
+cosign verify-blob \
+  --certificate-identity-regexp 'https://github.com/conduit-obs/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --signature   conduit-agent-0.0.1.tgz.sig \
+  --certificate conduit-agent-0.0.1.tgz.pem \
+  conduit-agent-0.0.1.tgz
+```
+
+A passing verification proves the chart was packaged and signed by a
+GitHub Actions workflow running under the `conduit-obs` org with no
+intermediate tampering — the standard supply-chain bar from the
+sigstore ecosystem.
+
+## Publishing the chart (maintainers)
+
+The repo-root `Makefile` carries the publishing recipe; CI calls it
+when a release tag is pushed (workflow lands in M12, but the recipe is
+self-contained and can be run locally with appropriate credentials).
+
+```bash
+# 1. Bump deploy/helm/conduit-agent/Chart.yaml: version (chart SemVer)
+#    and optionally appVersion (pinned conduit binary).
+
+# 2. Authenticate to ghcr.io with a PAT scoped to write:packages.
+echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$GITHUB_USER" --password-stdin
+
+# 3. Lint, package, push, sign — the recipe runs them in order.
+make helm-publish
+
+# Local-only key signing instead of cosign keyless OIDC:
+make helm-publish COSIGN_KEY=path/to/cosign.key
+```
+
+`make helm-publish` is composed of four smaller targets you can also
+invoke independently for debugging: `helm-lint` (no auth needed),
+`helm-package` (writes `dist/conduit-agent-<version>.tgz`),
+`helm-push` (uploads to the OCI registry), `helm-sign` (cosign sign +
+write `.sig` and `.pem` siblings next to the `.tgz`).
 
 ## Values reference
 

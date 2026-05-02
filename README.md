@@ -8,7 +8,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 
 ## Status
 
-**Pre-alpha. Milestones M1, M2, M3, M4, and M5 (partial) done.**
+**Pre-alpha. Milestones M1, M2, M3, M4, and M5.A–M5.D done; M5.E (k8s default boards) in flight.**
 
 | Step | Scope | Status |
 |---|---|---|
@@ -24,10 +24,11 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M5.A** | `profile.mode: k8s` schema knob (binds OTLP to `0.0.0.0`); Helm chart skeleton at [`deploy/helm/conduit-agent/`](deploy/helm/conduit-agent/README.md): DaemonSet, ConfigMap, ServiceAccount, Service, optional Secret | done |
 | **M5.B** | `profile.mode: k8s` defaults: per-node `hostmetrics`, `kubeletstats` against the local kubelet, `filelog/k8s` for `/var/log/pods/*` (with the upstream `container` operator), and `k8sattributes` enrichment on every pipeline. See [`internal/profiles/k8s/`](internal/profiles/k8s/README.md). | done |
 | **M5.C** | Helm chart wiring for the M5.B receivers: read-only `ClusterRole` + `ClusterRoleBinding` (gated by `rbac.create`), DaemonSet host bind mounts (`/hostfs` with `HostToContainer` propagation, `/var/log/pods`, `/var/log/containers`) gated by `daemonset.hostMounts.enabled`, `runAsRoot` security context, plus `make kind-smoketest` to verify the chart end-to-end on a disposable kind cluster. | done |
+| **M5.D** | Helm chart packaging + OCI publishing recipe (`make helm-package` / `make helm-publish`) targeting `oci://ghcr.io/conduit-obs/charts/conduit-agent` per ADR-0019, with cosign keyless-OIDC signing and a documented verification flow (`cosign verify-blob`). The first published version ships with v0.0.1; CI integration lands at M12. | done (CI hook lands at M12) |
 
 The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
 
-M5 ships in slices, mirroring the Linux / Docker pattern: M5.A is the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wires the **kubelet / container-log / `k8sattributes` defaults**, M5.C (this milestone) wires **RBAC + host bind mounts** so those receivers actually have access to what they need, plus the kind smoke recipe to prove it. M5.D ships OCI chart publishing, M5.E ships the default cluster + workload boards. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
+M5 ships in slices, mirroring the Linux / Docker pattern: M5.A was the **chart skeleton + schema knob** (`helm install` works as an OTLP relay), M5.B wired the **kubelet / container-log / `k8sattributes` defaults**, M5.C added **RBAC + host bind mounts** so those receivers actually have access to what they need plus the kind smoke recipe to prove it, M5.D (this milestone) lands the **chart packaging + OCI publishing recipe** with cosign signing. M5.E ships the default cluster + workload boards. See [`deploy/helm/README.md`](deploy/helm/README.md) for the slice plan.
 
 You can run, against any conduit.yaml:
 

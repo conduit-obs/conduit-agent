@@ -1,15 +1,18 @@
 apiVersion: v2
 name: conduit-agent
 description: |-
-  Conduit is an Apache-2.0 OpenTelemetry distribution for Honeycomb. This
-  chart deploys the conduit agent as a Kubernetes DaemonSet (one pod per
-  node) so cluster workloads can send OTLP to a local conduit:4317 / :4318
-  endpoint and have it forwarded to Honeycomb.
+  Conduit is an Apache-2.0, vendor-neutral OpenTelemetry Collector
+  distribution. This chart deploys the conduit agent as a Kubernetes
+  DaemonSet (one pod per node) so cluster workloads can send OTLP to a
+  local conduit-agent:4317 / :4318 endpoint and have it forwarded to
+  any OTLP-compatible backend — Honeycomb, Datadog, Grafana Cloud, an
+  in-cluster gateway, etc. — via the configurable output mode.
 type: application
 
-# Chart SemVer. Bumped per chart change, not per agent release. The chart
-# is not yet published; M5.D wires goreleaser to ship it to
-# ghcr.io/conduit-obs/charts/conduit-agent (registry venue per ADR-0019).
+# Chart SemVer. Bumped per chart change, not per agent release. Chart
+# is published to oci://ghcr.io/conduit-obs/charts/conduit-agent (M5.D;
+# registry venue per ADR-0019). The first published version will be
+# v0.0.1 once the publishing recipe runs against a release tag.
 version: 0.0.1
 
 # Pinned upstream Conduit binary version this chart's defaults assume.
@@ -24,11 +27,14 @@ sources:
 keywords:
   - opentelemetry
   - otel
-  - honeycomb
+  - otel-collector
   - observability
   - tracing
   - metrics
   - logs
+  - honeycomb
+  - datadog
+  - grafana
 
 maintainers:
   - name: Conduit Maintainers
@@ -41,7 +47,8 @@ maintainers:
 kubeVersion: ">=1.28.0-0"
 
 annotations:
-  # ArtifactHub annotations (used when M5.D lists the chart):
+  # ArtifactHub annotations — picked up when ArtifactHub indexes the
+  # OCI registry:
   # https://artifacthub.io/docs/topics/annotations/helm/
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
@@ -49,3 +56,9 @@ annotations:
       url: https://github.com/conduit-obs/conduit-agent
     - name: ADRs
       url: https://github.com/conduit-obs/conduit-agent/blob/main/docs/adr/README.md
+    - name: Chart README
+      url: https://github.com/conduit-obs/conduit-agent/blob/main/deploy/helm/conduit-agent/README.md
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/signKey: |
+    fingerprint: cosign-keyless
+    url: https://github.com/conduit-obs/conduit-agent/blob/main/deploy/helm/conduit-agent/README.md#verifying-the-signature

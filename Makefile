@@ -43,7 +43,8 @@ endif
 OCB_URL := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fbuilder%2Fv$(OCB_VERSION)/$(OCB_ASSET)
 
 .PHONY: help build test vendor lint fmt install-ocb build-ocb release-snapshot clean \
-        kind-up kind-image kind-load kind-deploy kind-test kind-down kind-smoketest
+        kind-up kind-image kind-load kind-deploy kind-test kind-down kind-smoketest \
+        helm-lint helm-package helm-push helm-sign helm-publish
 
 help: ## Show available make targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -163,3 +164,76 @@ kind-down: ## Delete the kind cluster
 
 kind-smoketest: kind-up kind-image kind-load kind-deploy kind-test ## Full kind smoke sequence (excluding kind-down)
 	@echo "kind smoke complete. Run 'make kind-down' to tear down."
+
+# ----------------------------------------------------------------------------
+# Helm chart packaging + OCI publishing (M5.D). The chart lives at
+# deploy/helm/conduit-agent; the published artifact is
+# oci://ghcr.io/conduit-obs/charts/conduit-agent per ADR-0019.
+#
+# Typical flows:
+#   make helm-lint       # local sanity check (helm lint + helm template)
+#   make helm-package    # produce dist/conduit-agent-<version>.tgz
+#   make helm-publish    # package + push + sign (CI flow)
+#
+# Authentication: helm push to ghcr.io needs `helm registry login` first.
+# In CI that's `helm registry login ghcr.io -u $GITHUB_ACTOR -p $GITHUB_TOKEN`;
+# locally use a PAT with write:packages scope.
+#
+# Signing: cosign keyless OIDC in CI (no key material; the workflow
+# inherits id-token: write); locally users can override COSIGN_KEY to
+# point at a private key file. Both produce a transparency-log entry
+# discoverable via `cosign verify`.
+# ----------------------------------------------------------------------------
+HELM ?= helm
+HELM_CHART_DIR := deploy/helm/conduit-agent
+HELM_CHART_VERSION := $(shell awk '/^version:/ {print $$2; exit}' $(HELM_CHART_DIR)/Chart.yaml)
+HELM_CHART_PACKAGE := $(DIST_DIR)/conduit-agent-$(HELM_CHART_VERSION).tgz
+HELM_OCI_REPO ?= oci://ghcr.io/conduit-obs/charts
+COSIGN ?= cosign
+COSIGN_KEY ?=
+
+helm-lint: ## Run helm lint + a default-values render to catch template regressions
+	$(HELM) lint $(HELM_CHART_DIR) \
+		--set conduit.serviceName=lint-smoke \
+		--set honeycomb.apiKey=lint_dummy
+	@$(HELM) template lint-smoke $(HELM_CHART_DIR) \
+		--set conduit.serviceName=lint-smoke \
+		--set honeycomb.apiKey=lint_dummy >/dev/null
+
+helm-package: $(HELM_CHART_PACKAGE) ## Package the chart into dist/conduit-agent-<version>.tgz
+
+$(HELM_CHART_PACKAGE):
+	@mkdir -p $(DIST_DIR)
+	$(HELM) package $(HELM_CHART_DIR) --destination $(DIST_DIR)
+	@echo "Packaged $(HELM_CHART_PACKAGE)."
+
+helm-push: helm-package ## Push the packaged chart to the OCI registry (requires `helm registry login`)
+	$(HELM) push $(HELM_CHART_PACKAGE) $(HELM_OCI_REPO)
+
+helm-sign: helm-package ## Sign the packaged chart with cosign (keyless OIDC by default; set COSIGN_KEY=<path> for key-based)
+	@if [ -n "$(COSIGN_KEY)" ]; then \
+		echo "Signing $(HELM_CHART_PACKAGE) with key $(COSIGN_KEY)..."; \
+		$(COSIGN) sign-blob --yes --key "$(COSIGN_KEY)" \
+			--output-signature $(HELM_CHART_PACKAGE).sig \
+			--output-certificate $(HELM_CHART_PACKAGE).pem \
+			$(HELM_CHART_PACKAGE); \
+	else \
+		echo "Signing $(HELM_CHART_PACKAGE) with cosign keyless OIDC..."; \
+		$(COSIGN) sign-blob --yes \
+			--output-signature $(HELM_CHART_PACKAGE).sig \
+			--output-certificate $(HELM_CHART_PACKAGE).pem \
+			$(HELM_CHART_PACKAGE); \
+	fi
+	@echo "Signature: $(HELM_CHART_PACKAGE).sig"
+	@echo "Certificate: $(HELM_CHART_PACKAGE).pem"
+
+helm-publish: helm-lint helm-push helm-sign ## Full publish flow: lint + package + push + sign
+	@echo "Published $(HELM_CHART_PACKAGE) to $(HELM_OCI_REPO)/conduit-agent:$(HELM_CHART_VERSION)."
+	@echo "Verify with:"
+	@echo "  helm pull $(HELM_OCI_REPO)/conduit-agent --version $(HELM_CHART_VERSION)"
+	@echo "  cosign verify-blob \\"
+	@echo "    --certificate-identity-regexp 'https://github.com/conduit-obs/.*' \\"
+	@echo "    --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+	@echo "    --signature $(HELM_CHART_PACKAGE).sig \\"
+	@echo "    --certificate $(HELM_CHART_PACKAGE).pem \\"
+	@echo "    $(HELM_CHART_PACKAGE)"
