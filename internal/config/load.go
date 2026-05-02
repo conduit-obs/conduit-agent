@@ -62,4 +62,18 @@ func (c *AgentConfig) applyDefaults() {
 	} else if c.Profile.Mode == "" {
 		c.Profile.Mode = ProfileModeAuto
 	}
+
+	// A missing metrics.red block means "RED enabled, default dimensions,
+	// default cardinality limit". Materializing the struct keeps the
+	// expander's branches symmetric with the profile / overrides paths
+	// (no nil-check, just method calls).
+	if c.Metrics == nil {
+		c.Metrics = &Metrics{}
+	}
+	if c.Metrics.RED == nil {
+		c.Metrics.RED = &REDConfig{}
+	}
+	if c.Metrics.RED.CardinalityLimit == 0 {
+		c.Metrics.RED.CardinalityLimit = DefaultREDCardinalityLimit
+	}
 }

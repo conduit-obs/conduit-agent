@@ -91,6 +91,49 @@ type templateView struct {
 	TraceProcessors  []string
 	MetricProcessors []string
 	LogProcessors    []string
+
+	// TraceExporters / MetricExporters / LogExporters list the exporter
+	// (and connector-as-exporter) IDs each pipeline writes to. In the
+	// RED-disabled / pre-M8 baseline this is just [ExporterName,
+	// "debug"]. With RED on, the traces pipeline appends "span_metrics"
+	// (the connector id) so spans tee through the connector and emerge
+	// as derived metrics on the metrics pipeline.
+	TraceExporters  []string
+	MetricExporters []string
+	LogExporters    []string
+
+	// REDEnabled reports whether the span_metrics connector should be
+	// rendered into the output. When true the template emits the
+	// connector block and tees the traces pipeline through it; when
+	// false the connector block is omitted and the metrics pipeline
+	// looks the same as a M2-era OTLP-only render. Computed once in
+	// newView so the template logic stays branch-free.
+	REDEnabled bool
+
+	// REDSpanDimensions is the final span-attribute dimension list
+	// rendered into the connector's "dimensions:" block — the always-on
+	// REDDefaultSpanDimensions concatenated with any user-supplied
+	// entries from cfg.Metrics.RED.SpanDimensions. Order is preserved
+	// so operators can reason about precedence (defaults first, user
+	// adds last).
+	REDSpanDimensions []string
+
+	// REDResourceDimensions is the final resource-attribute dimension
+	// list rendered into the connector's
+	// "resource_metrics_key_attributes:" block — REDDefaultResourceDimensions
+	// concatenated with cfg.Metrics.RED.ExtraResourceDimensions.
+	REDResourceDimensions []string
+
+	// REDHistogramBuckets is the explicit histogram bucket boundary
+	// list. Sourced from REDDefaultHistogramBuckets in V0; M9+ may
+	// expose a knob to override per-deployment.
+	REDHistogramBuckets []string
+
+	// REDCardinalityLimit caps the connector's total tracked dimension
+	// combinations (maps to upstream aggregation_cardinality_limit).
+	// Sourced from cfg.Metrics.RED.CardinalityLimit (defaulted to
+	// DefaultREDCardinalityLimit by config.applyDefaults).
+	REDCardinalityLimit int
 }
 
 // Expand renders the BASE upstream OTel Collector YAML for cfg — the
@@ -226,7 +269,65 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 	v.MetricProcessors = pipelineProcessorIDs(signalMetrics, v.K8sAttributes)
 	v.LogProcessors = pipelineProcessorIDs(signalLogs, v.K8sAttributes)
 
+	// Default exporter lists — RED, when enabled, appends the
+	// span_metrics connector id to the traces pipeline below.
+	defaultExporters := []string{v.ExporterName, "debug"}
+	v.TraceExporters = append([]string{}, defaultExporters...)
+	v.MetricExporters = append([]string{}, defaultExporters...)
+	v.LogExporters = append([]string{}, defaultExporters...)
+
+	applyREDView(v, cfg)
+
 	return v, nil
+}
+
+// applyREDView populates the RED-related templateView fields and tees
+// the connector into the traces / metrics pipelines. Called from
+// newView after the per-pipeline processor lists are computed so the
+// connector wire-up sees the final receiver / exporter sets.
+//
+// The connector ID rendered into the YAML is "span_metrics" (the
+// upstream snake_case name introduced in v0.119 and stable since;
+// v0.151 still accepts the legacy "spanmetrics" alias but warns at
+// startup, and we don't want to ship a startup warning).
+//
+// The function tolerates Metrics / Metrics.RED being nil so tests can
+// hand-build an AgentConfig without going through Load/Parse and still
+// get the RED-on default; the only knob a nil RED block is missing is
+// the cardinality limit, which we substitute with the documented
+// default.
+func applyREDView(v *templateView, cfg *config.AgentConfig) {
+	var red *config.REDConfig
+	if cfg.Metrics != nil {
+		red = cfg.Metrics.RED
+	}
+	v.REDEnabled = red.REDEnabled()
+	if !v.REDEnabled {
+		return
+	}
+	var (
+		userSpanDims, userResDims []string
+		cardLimit                 = config.DefaultREDCardinalityLimit
+	)
+	if red != nil {
+		userSpanDims = red.SpanDimensions
+		userResDims = red.ExtraResourceDimensions
+		if red.CardinalityLimit > 0 {
+			cardLimit = red.CardinalityLimit
+		}
+	}
+	v.REDSpanDimensions = append(append([]string{}, config.REDDefaultSpanDimensions...), userSpanDims...)
+	v.REDResourceDimensions = append(append([]string{}, config.REDDefaultResourceDimensions...), userResDims...)
+	v.REDHistogramBuckets = config.REDDefaultHistogramBuckets
+	v.REDCardinalityLimit = cardLimit
+
+	const connectorID = "span_metrics"
+	// Traces pipeline tees through the connector by listing it in its
+	// exporters. The data still flows to the real egress exporter
+	// alongside; the connector is a synthetic exporter that emits
+	// metrics on the receiver-side of the metrics pipeline.
+	v.TraceExporters = append(v.TraceExporters, connectorID)
+	v.MetricReceivers = append(v.MetricReceivers, connectorID)
 }
 
 // pipelineSignal is an internal enum used to compute per-pipeline

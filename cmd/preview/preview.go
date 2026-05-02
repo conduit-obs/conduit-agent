@@ -5,6 +5,8 @@ package preview
 import (
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -63,6 +65,14 @@ func run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("preview: %w", err)
 	}
 
+	// Print a short RED-dimension projection alongside any profile
+	// fallback warnings so operators see — at a glance — which
+	// dimensions span_metrics will tag every derived RED metric
+	// with. Stderr (not stdout) so a `conduit preview > out.yaml`
+	// pipeline still produces a clean YAML file. Skipped when RED
+	// is disabled to keep the inspection surface honest.
+	printREDProjection(cmd.ErrOrStderr(), cfg)
+
 	// Single config source: print it as one document (preserves the M2.B
 	// behavior — diff-friendly, drop-in to a manual `otelcol --config`).
 	out := cmd.OutOrStdout()
@@ -87,4 +97,36 @@ func run(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	return nil
+}
+
+// printREDProjection writes a short, human-readable summary of the
+// span_metrics connector's effective dimension set + cardinality cap
+// to w. Always called after Load() — so cfg has been through
+// applyDefaults — and only emits when RED is enabled (the disabled-
+// mode case has nothing useful to say).
+//
+// The intent is to give operators a "what will this cost me at query
+// time" preview without forcing them to grep the rendered YAML for
+// span_metrics:. M11's `conduit doctor` will surface the same set
+// alongside its CDT0510 cardinality projections; the wording stays
+// stable here so doctor output matches.
+func printREDProjection(w io.Writer, cfg *config.AgentConfig) {
+	if cfg == nil || cfg.Metrics == nil || cfg.Metrics.RED == nil {
+		return
+	}
+	red := cfg.Metrics.RED
+	if !red.REDEnabled() {
+		fmt.Fprintln(w, "conduit: RED metrics from spans: disabled (metrics.red.enabled=false)")
+		return
+	}
+	spanDims := append(append([]string{}, config.REDDefaultSpanDimensions...), red.SpanDimensions...)
+	resDims := append(append([]string{}, config.REDDefaultResourceDimensions...), red.ExtraResourceDimensions...)
+	limit := red.CardinalityLimit
+	if limit == 0 {
+		limit = config.DefaultREDCardinalityLimit
+	}
+	fmt.Fprintf(w, "conduit: RED metrics from spans: enabled (cardinality_limit=%d, span dims=%d, resource dims=%d)\n",
+		limit, len(spanDims), len(resDims))
+	fmt.Fprintf(w, "  span dimensions:     [%s]\n", strings.Join(spanDims, ", "))
+	fmt.Fprintf(w, "  resource dimensions: [%s]\n", strings.Join(resDims, ", "))
 }

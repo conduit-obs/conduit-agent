@@ -57,6 +57,7 @@ func (c *AgentConfig) Validate() error {
 
 	v.validateOutput(&c.Output)
 	v.validateProfile(c.Profile)
+	v.validateMetrics(c.Metrics)
 	v.validateOverrides(c.Overrides)
 
 	if len(v.issues) == 0 {
@@ -139,6 +140,36 @@ func (v *validator) validateProfile(p *Profile) {
 		// known mode
 	default:
 		v.add("profile.mode", fmt.Sprintf(`unknown value %q; want one of "auto", "linux", "darwin", "docker", "k8s", or "none"`, string(p.Mode)))
+	}
+}
+
+// validateMetrics enforces the RED-from-spans contract: cardinality limit
+// must be sane, user-supplied dimensions must not be on the denylist that
+// would tip the span_metrics connector into per-request cardinality.
+//
+// Denylist hits map to error code CDT0501 in the doctor catalog (M11);
+// the message intentionally calls that out so search-engine-style
+// debugging finds the canonical doc page.
+func (v *validator) validateMetrics(m *Metrics) {
+	if m == nil || m.RED == nil {
+		return
+	}
+	red := m.RED
+	if red.CardinalityLimit < 0 {
+		v.add("metrics.red.cardinality_limit",
+			fmt.Sprintf("must be >= 0; got %d", red.CardinalityLimit))
+	}
+	for i, name := range red.SpanDimensions {
+		if reason, blocked := REDDimensionDenylist[name]; blocked {
+			v.add(fmt.Sprintf("metrics.red.span_dimensions[%d]", i),
+				fmt.Sprintf(`%q is on the cardinality denylist (CDT0501): %s. See ADR-0006.`, name, reason))
+		}
+	}
+	for i, name := range red.ExtraResourceDimensions {
+		if reason, blocked := REDDimensionDenylist[name]; blocked {
+			v.add(fmt.Sprintf("metrics.red.extra_resource_dimensions[%d]", i),
+				fmt.Sprintf(`%q is on the cardinality denylist (CDT0501): %s. See ADR-0006.`, name, reason))
+		}
 	}
 }
 

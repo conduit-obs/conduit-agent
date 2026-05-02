@@ -164,6 +164,38 @@ exporters:
 {{- end }}
   debug:
     verbosity: basic
+{{- if .REDEnabled }}
+
+# span_metrics tees the traces pipeline into a derived RED metrics
+# stream (request count / error count / duration histogram) that lands
+# on the metrics pipeline before any sampling step. The dimension list
+# below is the documented Conduit default plus any user-supplied
+# additions in metrics.red.span_dimensions /
+# metrics.red.extra_resource_dimensions; ADR-0006 documents the
+# allowlist + denylist model and conduit doctor (M11) surfaces
+# CDT0501 / CDT0510 when those guardrails fire.
+#
+# aggregation_cardinality_limit caps total tracked dimension
+# combinations; excess flows to a single overflow series tagged
+# otel.metric.overflow="true" so cardinality-blowup is visible at
+# query time instead of crashing the agent.
+connectors:
+  span_metrics:
+    histogram:
+      explicit:
+        buckets: [{{ join .REDHistogramBuckets ", " }}]
+    dimensions:
+{{- range .REDSpanDimensions }}
+      - name: {{ . }}
+{{- end }}
+    resource_metrics_key_attributes:
+{{- range .REDResourceDimensions }}
+      - {{ . }}
+{{- end }}
+    add_resource_attributes: true
+    aggregation_cardinality_limit: {{ .REDCardinalityLimit }}
+    metrics_flush_interval: 60s
+{{- end }}
 
 # health_check is always on so Docker HEALTHCHECK, k8s liveness/readiness
 # probes, and `conduit doctor` (M11) all have a single, vendor-neutral
@@ -183,18 +215,18 @@ service:
         - {{ . }}
 {{- end }}
       processors: [{{ join .TraceProcessors ", " }}]
-      exporters: [{{ .ExporterName }}, debug]
+      exporters: [{{ join .TraceExporters ", " }}]
     metrics:
       receivers:
 {{- range .MetricReceivers }}
         - {{ . }}
 {{- end }}
       processors: [{{ join .MetricProcessors ", " }}]
-      exporters: [{{ .ExporterName }}, debug]
+      exporters: [{{ join .MetricExporters ", " }}]
     logs:
       receivers:
 {{- range .LogReceivers }}
         - {{ . }}
 {{- end }}
       processors: [{{ join .LogProcessors ", " }}]
-      exporters: [{{ .ExporterName }}, debug]
+      exporters: [{{ join .LogExporters ", " }}]

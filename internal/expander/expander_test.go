@@ -162,7 +162,14 @@ func TestExpand_OTLPMode_RendersGenericExporter(t *testing.T) {
 		`x-honeycomb-team:`,
 		`tls:`,
 	})
-	for _, p := range []string{"traces", "metrics", "logs"} {
+	// Traces tees through the span_metrics connector by default
+	// (M8 RED-from-spans); metrics + logs do not. Asserting both
+	// halves keeps the egress + connector contract together in
+	// one place.
+	if got := pipelineExporters(t, out, "traces"); !equalSet(got, []string{"otlphttp/otlp", "debug", "span_metrics"}) {
+		t.Errorf("traces pipeline exporters under otlp mode = %v; want [otlphttp/otlp debug span_metrics]", got)
+	}
+	for _, p := range []string{"metrics", "logs"} {
 		got := pipelineExporters(t, out, p)
 		if !equalSet(got, []string{"otlphttp/otlp", "debug"}) {
 			t.Errorf("%s pipeline exporters under otlp mode = %v; want [otlphttp/otlp debug]", p, got)
@@ -288,8 +295,11 @@ func TestExpand_LinuxProfile_HostMetricsDisabled(t *testing.T) {
 	mustNotContain(t, out, []string{`hostmetrics:`})
 	mustContain(t, out, []string{`filelog/system:`}) // logs still on by default
 
-	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp"}) {
-		t.Errorf("metrics pipeline should only have otlp when host_metrics=false; got %v", got)
+	// span_metrics is the M8 RED-from-spans connector — emitted on
+	// the metrics pipeline regardless of host_metrics, because RED
+	// derives from traces, not from host scrapers.
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "span_metrics"}) {
+		t.Errorf("metrics pipeline should be otlp + span_metrics when host_metrics=false; got %v", got)
 	}
 }
 
@@ -495,10 +505,16 @@ func TestExpand_DockerProfile_NoPlatformFragments(t *testing.T) {
 		`filelog/k8s:`,
 		`k8sattributes:`,
 	})
-	for _, p := range []string{"traces", "metrics", "logs"} {
+	// Traces and logs are otlp-only under docker; metrics also gets
+	// the span_metrics connector tee (M8 RED-from-spans) which is
+	// independent of any platform fragment.
+	for _, p := range []string{"traces", "logs"} {
 		if got := pipelineReceivers(t, out, p); !equalSet(got, []string{"otlp"}) {
 			t.Errorf("%s pipeline should only have otlp under docker profile; got %v", p, got)
 		}
+	}
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "span_metrics"}) {
+		t.Errorf("metrics pipeline under docker profile = %v; want [otlp span_metrics]", got)
 	}
 }
 
@@ -545,8 +561,8 @@ func TestExpand_K8sProfile_LoadsFragments(t *testing.T) {
 	if got := pipelineReceivers(t, out, "traces"); !equalSet(got, []string{"otlp"}) {
 		t.Errorf("traces pipeline under k8s profile should be otlp-only; got %v", got)
 	}
-	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "hostmetrics", "kubeletstats"}) {
-		t.Errorf("metrics pipeline under k8s profile = %v; want [otlp hostmetrics kubeletstats]", got)
+	if got := pipelineReceivers(t, out, "metrics"); !equalSet(got, []string{"otlp", "hostmetrics", "kubeletstats", "span_metrics"}) {
+		t.Errorf("metrics pipeline under k8s profile = %v; want [otlp hostmetrics kubeletstats span_metrics]", got)
 	}
 	if got := pipelineReceivers(t, out, "logs"); !equalSet(got, []string{"otlp", "filelog/k8s"}) {
 		t.Errorf("logs pipeline under k8s profile = %v; want [otlp filelog/k8s]", got)
@@ -718,6 +734,198 @@ func TestExpand_QuotesEmbeddedSpecialChars(t *testing.T) {
 func TestExpand_NilConfig(t *testing.T) {
 	if _, err := Expand(nil); err == nil {
 		t.Fatal("Expand(nil): want error, got nil")
+	}
+}
+
+// --- M8: RED metrics from spans -----------------------------------
+//
+// The next four tests cover the span_metrics connector wiring:
+//   1. Defaults-only rendering (the documented "out of the box"
+//      contract — what every customer gets without touching config).
+//   2. User-supplied dimension extras spliced onto the defaults.
+//   3. The disabled mode (an opt-out for operators running
+//      span_metrics on a downstream gateway).
+//   4. The validator rejecting denylisted dimensions at parse time
+//      so the connector never sees a CDT0501 input.
+
+// TestExpand_RED_DefaultsOn locks in the M8 contract: with no
+// metrics: block in conduit.yaml, the rendered config has the
+// span_metrics connector with the documented dimension set, the
+// default histogram buckets, the cardinality cap, and the
+// traces→connector→metrics pipeline tee. This is the test that
+// breaks if anyone "tunes" the defaults without an ADR.
+func TestExpand_RED_DefaultsOn(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	// applyDefaults populates Metrics.RED with the documented
+	// defaults; we exercise that path here rather than hand-set the
+	// values so a regression in applyDefaults shows up here too.
+	cfg.Metrics = &config.Metrics{RED: &config.REDConfig{
+		CardinalityLimit: config.DefaultREDCardinalityLimit,
+	}}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+
+	mustContain(t, out, []string{
+		`connectors:`,
+		`span_metrics:`,
+		// Documented histogram buckets (10ms..10s, nine boundaries).
+		`buckets: [10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]`,
+		// Default span dimensions — service.name is implicit
+		// upstream so we don't list it here.
+		`- name: deployment.environment`,
+		`- name: http.route`,
+		`- name: http.method`,
+		`- name: http.status_code`,
+		`- name: rpc.system`,
+		`- name: messaging.system`,
+		// Default resource_metrics_key_attributes.
+		`- service.name`,
+		`- k8s.namespace.name`,
+		`- cloud.region`,
+		`- team`,
+		// Cardinality cap maps to upstream's aggregation_cardinality_limit.
+		`aggregation_cardinality_limit: 5000`,
+		`add_resource_attributes: true`,
+	})
+	// http.target / http.path are denylisted, never default.
+	mustNotContain(t, out, []string{
+		`- name: http.target`,
+		`- name: http.path`,
+		`- name: trace_id`,
+	})
+	// Pipeline tee: traces exporters include span_metrics; metrics
+	// receivers include span_metrics; logs is unaffected.
+	if got := pipelineExporters(t, out, "traces"); !contains(got, "span_metrics") {
+		t.Errorf("traces pipeline must tee through span_metrics; got exporters %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); !contains(got, "span_metrics") {
+		t.Errorf("metrics pipeline must consume span_metrics; got receivers %v", got)
+	}
+	if got := pipelineExporters(t, out, "logs"); contains(got, "span_metrics") {
+		t.Errorf("logs pipeline must NOT include span_metrics; got exporters %v", got)
+	}
+	if got := pipelineReceivers(t, out, "logs"); contains(got, "span_metrics") {
+		t.Errorf("logs pipeline must NOT include span_metrics; got receivers %v", got)
+	}
+}
+
+// TestExpand_RED_UserDimensionsAppended verifies the user-extension
+// path: extras spliced onto the defaults preserve order, with the
+// defaults coming first so operators reasoning about precedence at
+// query time (e.g. "where do my dimensions land in the connector?")
+// have a deterministic answer.
+func TestExpand_RED_UserDimensionsAppended(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	cfg.Metrics = &config.Metrics{RED: &config.REDConfig{
+		SpanDimensions:          []string{"db.system", "feature.flag.key"},
+		ExtraResourceDimensions: []string{"service.namespace", "team.tier"},
+		CardinalityLimit:        10000,
+	}}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	// User extras present alongside defaults.
+	mustContain(t, out, []string{
+		`- name: deployment.environment`, // default still there
+		`- name: db.system`,              // user add
+		`- name: feature.flag.key`,
+		`- service.namespace`,            // user resource add
+		`- team.tier`,
+		`aggregation_cardinality_limit: 10000`, // user-overridden cap
+	})
+	// Dimension order: defaults BEFORE user extras (otherwise a
+	// later "promote to first-class field" rename in
+	// REDDefaultSpanDimensions would silently shift user extras'
+	// rendered position).
+	defIdx := strings.Index(out, "- name: messaging.operation")
+	userIdx := strings.Index(out, "- name: db.system")
+	if defIdx == -1 || userIdx == -1 || defIdx >= userIdx {
+		t.Errorf("default dimensions must render before user extras; got def=%d user=%d", defIdx, userIdx)
+	}
+}
+
+// TestExpand_RED_DisabledOmitsConnector covers the opt-out path —
+// metrics.red.enabled: false drops the connector entirely. Used
+// when span_metrics runs on a downstream gateway in the operator's
+// topology and double-emitting would inflate request counts.
+func TestExpand_RED_DisabledOmitsConnector(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	off := false
+	cfg.Metrics = &config.Metrics{RED: &config.REDConfig{Enabled: &off}}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{
+		`connectors:`,
+		`span_metrics:`,
+		`aggregation_cardinality_limit:`,
+		`add_resource_attributes:`,
+	})
+	if got := pipelineExporters(t, out, "traces"); contains(got, "span_metrics") {
+		t.Errorf("traces pipeline must NOT tee through span_metrics when RED is disabled; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); contains(got, "span_metrics") {
+		t.Errorf("metrics pipeline must NOT consume span_metrics when RED is disabled; got %v", got)
+	}
+}
+
+// TestREDDimensionDenylist_RejectsHighCardinalityAttributes covers
+// the schema-time half of ADR-0006 — the validator (running before
+// the expander) refuses to even attempt rendering a config where a
+// user adds e.g. user.id to the dimension list. The error message
+// must call out CDT0501 so operators can search the doctor catalog
+// for the explanation; failing fast at parse beats failing slow at
+// query when the cardinality wall is hit hours later.
+func TestREDDimensionDenylist_RejectsHighCardinalityAttributes(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+		dim   string
+	}{
+		{"trace_id-span", "metrics.red.span_dimensions[0]", "trace_id"},
+		{"user.id-span", "metrics.red.span_dimensions[0]", "user.id"},
+		{"http.target-span", "metrics.red.span_dimensions[0]", "http.target"},
+		{"customer_id-resource", "metrics.red.extra_resource_dimensions[0]", "customer_id"},
+		{"url.full-resource", "metrics.red.extra_resource_dimensions[0]", "url.full"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.AgentConfig{
+				ServiceName:           "demo",
+				DeploymentEnvironment: "dev",
+				Output: config.Output{
+					Mode: config.OutputModeHoneycomb,
+					Honeycomb: &config.HoneycombOutput{
+						APIKey:   "${env:KEY}",
+						Endpoint: config.DefaultHoneycombEndpoint,
+					},
+				},
+				Profile: &config.Profile{Mode: config.ProfileModeNone},
+				Metrics: &config.Metrics{RED: &config.REDConfig{}},
+			}
+			if strings.HasPrefix(tc.field, "metrics.red.span_dimensions") {
+				cfg.Metrics.RED.SpanDimensions = []string{tc.dim}
+			} else {
+				cfg.Metrics.RED.ExtraResourceDimensions = []string{tc.dim}
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate: want denylist error for dim %q, got nil", tc.dim)
+			}
+			msg := err.Error()
+			for _, want := range []string{tc.dim, "CDT0501", "ADR-0006"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error message must include %q; got %q", want, msg)
+				}
+			}
+		})
 	}
 }
 

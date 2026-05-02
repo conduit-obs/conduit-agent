@@ -507,6 +507,136 @@ overrides:
 	}
 }
 
+// TestParse_REDDefaultsWhenOmitted verifies the M8 contract that
+// applyDefaults materializes Metrics.RED with the documented
+// CardinalityLimit. Without this the expander's RED-on path would
+// have to nil-check at every read, and the rendered config could
+// drift from the published default if a future patch flipped the
+// "0 == use default" semantics.
+func TestParse_REDDefaultsWhenOmitted(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Metrics == nil || cfg.Metrics.RED == nil {
+		t.Fatal("metrics.red: nil after defaulting; want struct with documented defaults")
+	}
+	if !cfg.Metrics.RED.REDEnabled() {
+		t.Error("RED.REDEnabled: got false, want true (default)")
+	}
+	if cfg.Metrics.RED.CardinalityLimit != DefaultREDCardinalityLimit {
+		t.Errorf("RED.CardinalityLimit: got %d, want %d (default)", cfg.Metrics.RED.CardinalityLimit, DefaultREDCardinalityLimit)
+	}
+	if len(cfg.Metrics.RED.SpanDimensions) != 0 || len(cfg.Metrics.RED.ExtraResourceDimensions) != 0 {
+		t.Errorf("RED dimensions on a default-rendered config should be empty (defaults are baked into the expander, not the loaded config); got span=%v resource=%v",
+			cfg.Metrics.RED.SpanDimensions, cfg.Metrics.RED.ExtraResourceDimensions)
+	}
+}
+
+// TestParse_REDExplicitDimensions exercises the user-knob path:
+// extras round-trip from YAML, the user-supplied cardinality limit
+// overrides the default, and the validator does NOT reject any of
+// the example "good" dimensions (db.system, feature.flag.key,
+// service.namespace, team.tier).
+func TestParse_REDExplicitDimensions(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+metrics:
+  red:
+    enabled: true
+    cardinality_limit: 12000
+    span_dimensions:
+      - db.system
+      - feature.flag.key
+    extra_resource_dimensions:
+      - service.namespace
+      - team.tier
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	red := cfg.Metrics.RED
+	if !red.REDEnabled() {
+		t.Error("RED.REDEnabled: got false, want true")
+	}
+	if red.CardinalityLimit != 12000 {
+		t.Errorf("RED.CardinalityLimit: got %d, want 12000", red.CardinalityLimit)
+	}
+	if len(red.SpanDimensions) != 2 || red.SpanDimensions[0] != "db.system" || red.SpanDimensions[1] != "feature.flag.key" {
+		t.Errorf("RED.SpanDimensions: got %v", red.SpanDimensions)
+	}
+	if len(red.ExtraResourceDimensions) != 2 {
+		t.Errorf("RED.ExtraResourceDimensions: got %v", red.ExtraResourceDimensions)
+	}
+}
+
+// TestParse_REDDenylistedDimensionRejected covers the schema-time
+// half of ADR-0006 from the user's surface: writing user.id under
+// metrics.red.span_dimensions in conduit.yaml fails Parse with a
+// CDT0501-mapped error before the agent ever touches the
+// span_metrics connector.
+func TestParse_REDDenylistedDimensionRejected(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+metrics:
+  red:
+    span_dimensions:
+      - user.id
+`
+	_, err := Parse(strings.NewReader(yaml))
+	if err == nil {
+		t.Fatal("Parse: want denylist error for user.id, got nil")
+	}
+	for _, want := range []string{"user.id", "CDT0501", "ADR-0006", "metrics.red.span_dimensions[0]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q; got: %v", want, err)
+		}
+	}
+}
+
+// TestParse_REDDisabledOptOut covers the operator who is running
+// span_metrics on a downstream gateway and needs the agent to skip
+// the connector to avoid double-emitting RED metrics.
+func TestParse_REDDisabledOptOut(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: dev
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: x
+metrics:
+  red:
+    enabled: false
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Metrics.RED.REDEnabled() {
+		t.Error("RED.REDEnabled: got true after enabled: false; opt-out is a footgun if it doesn't take")
+	}
+}
+
 func TestValidationError_Format(t *testing.T) {
 	err := &ValidationError{
 		Issues: []FieldIssue{

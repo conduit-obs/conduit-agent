@@ -8,7 +8,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 
 ## Status
 
-**Pre-alpha. Milestones M1, M2, M3, M4, and M5 (all slices) done.**
+**Pre-alpha. Milestones M1, M2, M3, M4, M5 (all slices), and M8 done.**
 
 | Step | Scope | Status |
 |---|---|---|
@@ -26,6 +26,7 @@ Conduit is a curated distribution of the upstream OpenTelemetry Collector plus a
 | **M5.C** | Helm chart wiring for the M5.B receivers: read-only `ClusterRole` + `ClusterRoleBinding` (gated by `rbac.create`), DaemonSet host bind mounts (`/hostfs` with `HostToContainer` propagation, `/var/log/pods`, `/var/log/containers`) gated by `daemonset.hostMounts.enabled`, `runAsRoot` security context, plus `make kind-smoketest` to verify the chart end-to-end on a disposable kind cluster. | done |
 | **M5.D** | Helm chart packaging + OCI publishing recipe (`make helm-package` / `make helm-publish`) targeting `oci://ghcr.io/conduit-obs/charts/conduit-agent` per ADR-0019, with cosign keyless-OIDC signing and a documented verification flow (`cosign verify-blob`). The first published version ships with v0.0.1; CI integration lands at M12. | done (CI hook lands at M12) |
 | **M5.E** | [`dashboards/k8s-cluster-overview.json`](dashboards/k8s-cluster-overview.json) — pod-keyed, namespace-scoped, narrative-driven (Cluster shape → Compute absolute → Compute relative to limits → Network → Filesystem → Logs) per [PROFILE_SPEC.md](internal/profiles/PROFILE_SPEC.md) §3. Pulls in a small opt-in metric set (`container.uptime`, `k8s.pod.{cpu,memory}_limit_utilization`) enabled in `internal/profiles/k8s/kubelet.yaml`. | done |
+| **M8** | RED-from-spans on by default: `span_metrics` connector tees the traces pipeline into request count / error count / duration histogram metrics with the documented default dimensions (`service.name`, `deployment.environment`, `http.{route,method,status_code}`, `rpc.*`, `messaging.*`, `k8s.namespace.name`, `cloud.region`, `team`), schema-time denylist on high-cardinality attributes (CDT0501), `aggregation_cardinality_limit` cap (default 5000) with overflow tagged `otel.metric.overflow="true"`, and a stderr dimension projection from `conduit preview`. See [`docs/adr/adr-0006.md`](docs/adr/adr-0006.md). | done |
 
 The Docker default board (originally an M4 deliverable) is intentionally folded into M9 — the V0 docker profile is OTLP-only by design, so a docker host-overview shipping at M4 would have empty panels. M9 picks the host-metrics-from-container default and ships `dashboards/docker-host-overview.json` with real columns to plot.
 
@@ -271,6 +272,48 @@ overrides:
 How it works mechanically: the expander emits the user's `overrides:` block as a *second* `yaml:` config source to the embedded Collector — the Collector's standard multi-config resolver deep-merges them at startup (maps merge by key, lists replace wholesale). Conduit doesn't ship its own deep-merge code; the merge semantics are exactly what `otelcol --config base.yaml --config overrides.yaml` would do. `conduit preview` shows the two documents separated by `---` so you can see what's layering on top of what.
 
 Top-level keys outside the standard collector vocab (`receivers` / `processors` / `exporters` / `connectors` / `extensions` / `service`) are validation errors at load time, so a typo doesn't silently no-op. See [ADR-0012](docs/adr/adr-0012.md) for the design rationale and the review cadence — heavy override patterns are signal that the schema is missing a first-class field, not a normal use case.
+
+### RED metrics from spans (M8)
+
+Out of the box, Conduit tees the traces pipeline into a derived RED metric stream — request count, error count, duration histogram — using the upstream `span_metrics` connector. The connector lives **before** any sampling step, so RED counts reflect 100% of traffic even when you tail-sample downstream (Refinery, gateway). Default-on means a service map and latency histograms in the destination backend the moment OTLP traces start flowing, with zero schema changes from the operator.
+
+Default dimensions:
+
+| Source | Attributes |
+|---|---|
+| Span (built into upstream connector) | `service.name`, `span.name`, `span.kind`, `status.code` |
+| Span (Conduit defaults) | `deployment.environment`, `http.{route,method,status_code}`, `rpc.{system,service,method}`, `messaging.{system,operation}` |
+| Resource | `service.name`, `deployment.environment`, `k8s.namespace.name`, `cloud.region`, `team` |
+
+Histogram buckets: `[10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]`. Cardinality cap: `aggregation_cardinality_limit: 5000` — combinations beyond the cap roll into a single overflow series tagged `otel.metric.overflow="true"`, so cardinality blow-up shows up at query time as a visible outlier instead of a silent OOM.
+
+Add tenant-safe dimensions through `metrics.red`:
+
+```yaml
+metrics:
+  red:
+    enabled: true                       # default; set false to skip the connector entirely
+    cardinality_limit: 10000            # default 5000
+    span_dimensions:
+      - db.system                       # appended to the default span dimension list
+      - feature.flag.key
+    extra_resource_dimensions:
+      - service.namespace               # appended to the default resource dimension list
+      - team.tier
+```
+
+High-cardinality attributes (`trace_id`, `span_id`, `request_id`, `user.id`, `customer_id`, `tenant_id`, `url.full`, `http.url`, `http.path`, `http.target`) are rejected at validation time with error code `CDT0501` per [ADR-0006](docs/adr/adr-0006.md) — the typical "I want one metric per user" instinct turns into per-request cardinality on real traffic and tips the connector into its overflow bucket within minutes.
+
+`conduit preview` prints the projected dimension set + cap to stderr alongside the rendered YAML on stdout, so a `conduit preview > out.yaml` produces a clean drop-in config while keeping the dimension projection visible:
+
+```
+$ conduit preview -c conduit.yaml > /tmp/otelcol.yaml
+conduit: RED metrics from spans: enabled (cardinality_limit=5000, span dims=9, resource dims=5)
+  span dimensions:     [deployment.environment, http.route, http.method, http.status_code, rpc.system, rpc.service, rpc.method, messaging.system, messaging.operation]
+  resource dimensions: [service.name, deployment.environment, k8s.namespace.name, cloud.region, team]
+```
+
+Operators who run `span_metrics` on a downstream gateway (and don't want to double-count) set `metrics.red.enabled: false` to skip the connector. The `conduit doctor` command (M11) will surface the overflow-bucket count as `CDT0510` once an overflow appears, so cardinality drift is observable from the agent itself.
 
 ## Default dashboards
 

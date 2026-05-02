@@ -32,6 +32,14 @@ type AgentConfig struct {
 	// defaults and run OTLP-only (the M2 behavior).
 	Profile *Profile `yaml:"profile,omitempty"`
 
+	// Metrics configures Conduit's derived-metrics behavior. The only V0
+	// knob is the RED-from-spans connector (metrics.red); future V1 / V2
+	// expansions (custom metric pipelines, prometheusreceiver scrape
+	// configs, etc.) attach here so the schema doesn't grow a top-level
+	// field per metric source. nil = full defaults (RED enabled,
+	// documented dimension set, 5000-combination cardinality limit).
+	Metrics *Metrics `yaml:"metrics,omitempty"`
+
 	// Overrides is the documented escape hatch for advanced users who need
 	// to reach upstream OTel Collector knobs Conduit has not surfaced as
 	// first-class fields. Any key under here is spliced verbatim into the
@@ -233,4 +241,159 @@ type GatewayOutput struct {
 	// Use this for gateway-specific auth (e.g. an API key) when the gateway
 	// requires one.
 	Headers map[string]string `yaml:"headers,omitempty"`
+}
+
+// Metrics is the umbrella for metric-pipeline tuning. V0 ships exactly
+// one nested block (RED, the spans → request/error/duration tee); V1+
+// will likely add fields here for prometheusreceiver scrape config,
+// derived-metric rollups, etc.
+type Metrics struct {
+	// RED configures the span_metrics connector that tees RED metrics
+	// (request count / error count / duration histogram) off the traces
+	// pipeline. Lives before any sampling step so derived metrics see
+	// 100% of traffic even when you tail-sample downstream. nil = use
+	// the documented defaults (enabled, default dimension set, 5000
+	// total-combination cardinality limit). See ADR-0006 (allowlist +
+	// denylist model) and 04-milestone-plan.md §M8.
+	RED *REDConfig `yaml:"red,omitempty"`
+}
+
+// REDConfig tunes the RED-from-spans connector. The defaults are
+// chosen to be "the dimension set Datadog / Honeycomb / Grafana Cloud
+// users would expect on a service map without lifting a finger" —
+// service.name (built into the connector), deployment.environment,
+// http.{route,method,status_code}, rpc.{system,service,method},
+// messaging.{system,operation}. Operators with multi-tenant or
+// regionalized workloads can add tenant-safe dimensions through
+// SpanDimensions / ExtraResourceDimensions; high-cardinality
+// attributes (raw IDs, paths, URLs) are blocked at validation time
+// per the denylist in validate.go.
+type REDConfig struct {
+	// Enabled toggles RED-from-spans generation. Pointer so we can
+	// distinguish "field omitted" from "set to false"; nil collapses
+	// to true via applyDefaults. Set to false to skip rendering the
+	// span_metrics connector entirely (e.g. when a downstream gateway
+	// is the place running spanmetrics in your topology).
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// SpanDimensions is appended to the default span-attribute
+	// dimension list. Each entry must NOT be in the high-cardinality
+	// denylist (trace_id, span_id, request_id, user.id, customer_id,
+	// tenant_id, url.full, http.url, http.path, http.target). The
+	// validator rejects denylisted entries with a CDT0501-mapped
+	// error pointing at this field.
+	SpanDimensions []string `yaml:"span_dimensions,omitempty"`
+
+	// ExtraResourceDimensions is appended to the default resource-
+	// attribute dimension list (service.name [implicit],
+	// deployment.environment, k8s.namespace.name, cloud.region, team).
+	// Same denylist as SpanDimensions applies — adding tenant_id at
+	// the resource level is just as cardinality-explosive as adding
+	// it at the span level.
+	ExtraResourceDimensions []string `yaml:"extra_resource_dimensions,omitempty"`
+
+	// CardinalityLimit caps the total number of unique dimension-value
+	// combinations the connector tracks; excess combinations are
+	// dropped into a single overflow series tagged
+	// otel.metric.overflow="true". Defaults to 5000, which sits well
+	// above a typical service's RED dimension fan-out (a few hundred)
+	// but well below the cardinality wall that would make
+	// span_metrics' working set unbounded. Maps directly to the
+	// upstream connector's aggregation_cardinality_limit. conduit
+	// doctor (M11) will surface the overflow-bucket count as
+	// CDT0510 when it's non-zero.
+	CardinalityLimit int `yaml:"cardinality_limit,omitempty"`
+}
+
+// REDEnabled reports the effective RED-on / RED-off setting.
+func (r *REDConfig) REDEnabled() bool {
+	if r == nil {
+		return true
+	}
+	if r.Enabled == nil {
+		return true
+	}
+	return *r.Enabled
+}
+
+// DefaultREDCardinalityLimit caps the total dimension-combination
+// fan-out the span_metrics connector retains. Mirrors the upstream
+// connector's aggregation_cardinality_limit, which kicks excess
+// combinations into a single overflow series instead of blowing up
+// memory.
+const DefaultREDCardinalityLimit = 5000
+
+// REDDefaultSpanDimensions is the always-on span-dimension set the
+// connector adds on top of its built-in service.name / span.name /
+// span.kind / status.code dimensions. Every entry has been weighed
+// against the cardinality denylist: http.route is the templated form
+// (NOT raw http.target / http.url); http.method / http.status_code
+// are bounded; rpc.* and messaging.* fan out by service shape, not
+// by request.
+var REDDefaultSpanDimensions = []string{
+	"deployment.environment",
+	"http.route",
+	"http.method",
+	"http.status_code",
+	"rpc.system",
+	"rpc.service",
+	"rpc.method",
+	"messaging.system",
+	"messaging.operation",
+}
+
+// REDDefaultResourceDimensions is the always-on resource-dimension
+// set. service.name is implicit (the connector emits it on every
+// metric without prompting), but is included here so the rendered
+// resource_metrics_key_attributes list is self-describing.
+var REDDefaultResourceDimensions = []string{
+	"service.name",
+	"deployment.environment",
+	"k8s.namespace.name",
+	"cloud.region",
+	"team",
+}
+
+// REDDefaultHistogramBuckets is the explicit bucket boundary set used
+// for the duration histogram. Tuned for typical HTTP request latency
+// (10ms..10s); deliberately fewer / wider buckets than upstream's
+// default 16-bucket schema to keep cardinality predictable. Operators
+// who need finer resolution should override via the overrides:
+// escape hatch (ADR-0012).
+var REDDefaultHistogramBuckets = []string{
+	"10ms",
+	"50ms",
+	"100ms",
+	"250ms",
+	"500ms",
+	"1s",
+	"2.5s",
+	"5s",
+	"10s",
+}
+
+// REDDimensionDenylist is the set of attribute names rejected from
+// SpanDimensions / ExtraResourceDimensions at validation time. Each
+// entry would, if added as a RED dimension, multiply the connector's
+// dimension-combination fan-out by ~one-per-request — an O(N)
+// cardinality blow-up that would tip span_metrics into its overflow
+// bucket within minutes on real traffic.
+//
+// Names with their reason:
+//   - trace_id / span_id / request_id: per-request unique by definition
+//   - user.id / customer_id / tenant_id: per-user / per-tenant unique
+//   - url.full / http.url: unique per query string / fragment
+//   - http.path / http.target: usually contains IDs (vs http.route which
+//     is the templated form)
+var REDDimensionDenylist = map[string]string{
+	"trace_id":     "per-request unique; tracks every individual request — use http.route for endpoint-level grouping",
+	"span_id":      "per-span unique; not meaningful as a dimension",
+	"request_id":   "per-request unique",
+	"user.id":      "per-user unique; cardinality scales with user count",
+	"customer_id":  "per-customer unique; cardinality scales with customer count",
+	"tenant_id":    "per-tenant unique; cardinality scales with tenant count",
+	"url.full":     "includes query string + fragment; varies per call",
+	"http.url":     "deprecated alias for url.full",
+	"http.path":    "usually contains IDs; use http.route for the templated form",
+	"http.target":  "usually contains IDs; use http.route for the templated form",
 }
