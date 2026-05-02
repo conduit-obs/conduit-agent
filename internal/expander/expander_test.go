@@ -443,6 +443,80 @@ func TestExpand_HostMetrics_EnablesUtilizationMetrics(t *testing.T) {
 	}
 }
 
+// transform/logs's M9.C JSON parsing block lifts the well-known
+// JSON fields (trace_id / span_id / level / msg) onto OTel semantic
+// locations so trace correlation works for apps that log JSON to
+// stdout (zerolog, pino, structlog, slog, ...) without forcing
+// every team to re-instrument their loggers. The block is gated
+// on body being a JSON-looking string (`IsString(body)` plus
+// `^\\s*\\{` regex) so non-JSON bodies pass through unchanged.
+//
+// The test asserts:
+//
+//   1. The block sits between redaction (M9.B) and normalized_message
+//      so it sees redacted JSON and can populate attributes["message"]
+//      for the normalized_message block to consume.
+//   2. Three trace_id naming conventions and three span_id naming
+//      conventions are handled.
+//   3. Empty-string gates protect SDK-set values from being
+//      overwritten — checked by looking for the
+//      `trace_id.string == ""` predicate.
+//   4. The five-level severity_number mapping covers
+//      trace/debug/info/warn/error/fatal with the documented
+//      regex aliases (info/informational, warn/warning, etc.).
+func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		// Trigger condition: JSON-looking string body.
+		`'IsString(body)'`,
+		`'IsMatch(body, "^\\s*\\{")'`,
+		// Single ParseJSON pass into per-record cache.
+		`set(cache["json"], ParseJSON(body))`,
+		// Trace id naming conventions.
+		`cache["json"]["trace_id"]`,
+		`cache["json"]["traceId"]`,
+		`cache["json"]["trace.id"]`,
+		// Span id naming conventions.
+		`cache["json"]["span_id"]`,
+		`cache["json"]["spanId"]`,
+		`cache["json"]["span.id"]`,
+		// SDK-set values must survive the lift — the empty-string
+		// guard is the contract that makes that work.
+		`trace_id.string == ""`,
+		`span_id.string == ""`,
+		// Message lift so normalized_message has data on JSON bodies.
+		`cache["json"]["msg"]`,
+		`cache["json"]["message"]`,
+		// Severity-number mapping.
+		`SEVERITY_NUMBER_TRACE`,
+		`SEVERITY_NUMBER_DEBUG`,
+		`SEVERITY_NUMBER_INFO`,
+		`SEVERITY_NUMBER_WARN`,
+		`SEVERITY_NUMBER_ERROR`,
+		`SEVERITY_NUMBER_FATAL`,
+		`(?i)^info(rmational)?$`,
+		`(?i)^warn(ing)?$`,
+		`(?i)^(error|err|severe)$`,
+		`(?i)^(fatal|critical|panic|emerg)$`,
+	})
+	// Block ordering: redaction → JSON lift → normalized_message.
+	// JSON lift sits in the middle so normalized_message inherits
+	// the (a) redacted body and (b) message attribute populated
+	// from the JSON's "msg" / "message" field.
+	redIdx := strings.Index(out, "AKIA****REDACTED****")
+	jsonIdx := strings.Index(out, `set(cache["json"], ParseJSON(body))`)
+	normIdx := strings.Index(out, `set(attributes["normalized_message"]`)
+	if redIdx == -1 || jsonIdx == -1 || normIdx == -1 {
+		t.Fatalf("block markers missing: redaction=%d json=%d normalized=%d", redIdx, jsonIdx, normIdx)
+	}
+	if !(redIdx < jsonIdx && jsonIdx < normIdx) {
+		t.Errorf("expected redaction(%d) < json(%d) < normalized(%d)", redIdx, jsonIdx, normIdx)
+	}
+}
+
 // transform/logs's M9.B redaction block masks well-known credential
 // patterns in body and attributes["message"] BEFORE normalized_message
 // is computed. The contract is "default-on, narrow regex set" —
