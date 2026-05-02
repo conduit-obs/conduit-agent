@@ -637,6 +637,170 @@ metrics:
 	}
 }
 
+// M10.A: persistent_queue.enabled defaults Dir to
+// DefaultPersistentQueueDir; explicit Dir is honored. Disabled
+// persistent_queue stays inert.
+func TestParse_PersistentQueueDefaultsDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantNil bool
+		wantDir string
+	}{
+		{
+			name: "enabled-without-dir",
+			yaml: `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+  persistent_queue:
+    enabled: true
+`,
+			wantDir: DefaultPersistentQueueDir,
+		},
+		{
+			name: "enabled-with-explicit-dir",
+			yaml: `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+  persistent_queue:
+    enabled: true
+    dir: /var/conduit/queue-2
+`,
+			wantDir: "/var/conduit/queue-2",
+		},
+		{
+			name: "disabled-stays-disabled",
+			yaml: `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+  persistent_queue:
+    enabled: false
+`,
+			wantDir: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(strings.NewReader(tc.yaml))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			pq := cfg.Output.PersistentQueue
+			if pq == nil {
+				t.Fatal("Output.PersistentQueue: nil; want non-nil after applyDefaults")
+			}
+			if pq.Dir != tc.wantDir {
+				t.Errorf("Dir: got %q, want %q", pq.Dir, tc.wantDir)
+			}
+		})
+	}
+}
+
+// Persistent queue rejects relative dirs and tmpfs-style dirs at
+// validation time so the failure mode is "agent refuses to start
+// with a clear error" rather than "queue silently disappears on
+// every reboot".
+func TestParse_PersistentQueueRejectsBadDirs(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		wantSub string // substring expected in the validation error
+	}{
+		{name: "relative", dir: "queue", wantSub: "must be an absolute path"},
+		{name: "tmpfs-tmp", dir: "/tmp/conduit-queue", wantSub: "tmpfs"},
+		{name: "tmpfs-shm", dir: "/dev/shm/q", wantSub: "tmpfs"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+  persistent_queue:
+    enabled: true
+    dir: ` + tc.dir + "\n"
+			_, err := Parse(strings.NewReader(yaml))
+			if err == nil {
+				t.Fatalf("Parse: want validation error for dir=%q", tc.dir)
+			}
+			if !strings.Contains(err.Error(), "output.persistent_queue.dir") {
+				t.Errorf("error should mention output.persistent_queue.dir; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error should mention %q; got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+// M10.B: honeycomb.traces.via_refinery requires a non-empty endpoint;
+// validation rejects an empty value with a path that points operators
+// at the right field.
+func TestParse_RefineryRequiresEndpoint(t *testing.T) {
+	yaml := `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+    traces:
+      via_refinery:
+        endpoint: ""
+`
+	_, err := Parse(strings.NewReader(yaml))
+	if err == nil {
+		t.Fatal("Parse: want validation error for empty refinery endpoint")
+	}
+	if !strings.Contains(err.Error(), "output.honeycomb.traces.via_refinery.endpoint") {
+		t.Errorf("error should mention via_refinery.endpoint path; got: %v", err)
+	}
+}
+
+func TestParse_RefineryAcceptsValidEndpoint(t *testing.T) {
+	yaml := `
+service_name: demo
+deployment_environment: prod
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+    traces:
+      via_refinery:
+        endpoint: refinery.observability.svc:4317
+        insecure: true
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	tr := cfg.Output.Honeycomb.Traces
+	if tr == nil || tr.ViaRefinery == nil {
+		t.Fatal("Output.Honeycomb.Traces.ViaRefinery: nil")
+	}
+	if tr.ViaRefinery.Endpoint != "refinery.observability.svc:4317" {
+		t.Errorf("Endpoint: got %q", tr.ViaRefinery.Endpoint)
+	}
+	if !tr.ViaRefinery.Insecure {
+		t.Errorf("Insecure: got false, want true")
+	}
+}
+
 func TestValidationError_Format(t *testing.T) {
 	err := &ValidationError{
 		Issues: []FieldIssue{

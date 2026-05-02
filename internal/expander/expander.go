@@ -134,6 +134,35 @@ type templateView struct {
 	// Sourced from cfg.Metrics.RED.CardinalityLimit (defaulted to
 	// DefaultREDCardinalityLimit by config.applyDefaults).
 	REDCardinalityLimit int
+
+	// PersistentQueueEnabled (M10.A) toggles the file_storage extension
+	// + the per-exporter sending_queue.storage block. When true the
+	// rendered YAML wires every active exporter's sending_queue to the
+	// extension's persistent backing; when false the upstream
+	// in-memory sending_queue defaults apply unchanged.
+	PersistentQueueEnabled bool
+
+	// PersistentQueueDir is the on-disk directory backing the
+	// file_storage extension when PersistentQueueEnabled is true.
+	// Already defaulted by config.applyDefaults (V0 default:
+	// /var/lib/conduit/queue).
+	PersistentQueueDir string
+
+	// RefineryEnabled (M10.B) toggles the otlp/refinery exporter block
+	// in honeycomb mode. When true, the traces pipeline routes only
+	// through the refinery exporter (metrics + logs continue direct
+	// to Honeycomb); when false the traces pipeline uses the same
+	// otlphttp/honeycomb exporter as metrics + logs.
+	RefineryEnabled  bool
+	RefineryEndpoint string
+	RefineryInsecure bool
+
+	// GatewayInsecure (M10.C) feeds into the gateway exporter's
+	// `tls.insecure` field. The rendered YAML always emits an explicit
+	// `tls: { insecure: <bool> }` block in gateway mode so the
+	// TLS-required-by-default contract is visible at preview time
+	// (true means the operator opted into the lab override).
+	GatewayInsecure bool
 }
 
 // Expand renders the BASE upstream OTel Collector YAML for cfg — the
@@ -246,12 +275,32 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 	switch cfg.Output.Mode {
 	case config.OutputModeHoneycomb:
 		v.ExporterName = "otlphttp/honeycomb"
+		// M10.B: route traces through Refinery if configured. Metrics
+		// and logs continue through the direct Honeycomb exporter; the
+		// per-pipeline exporter list overrides happen below after
+		// applyREDView so RED's connector tee composes correctly.
+		if hc := cfg.Output.Honeycomb; hc != nil && hc.Traces != nil && hc.Traces.ViaRefinery != nil {
+			v.RefineryEnabled = true
+			v.RefineryEndpoint = hc.Traces.ViaRefinery.Endpoint
+			v.RefineryInsecure = hc.Traces.ViaRefinery.Insecure
+		}
 	case config.OutputModeOTLP:
 		v.ExporterName = "otlphttp/otlp"
 	case config.OutputModeGateway:
 		v.ExporterName = "otlp/gateway"
+		if cfg.Output.Gateway != nil {
+			v.GatewayInsecure = cfg.Output.Gateway.Insecure
+		}
 	default:
 		return nil, fmt.Errorf("expand: unsupported output.mode %q (validation should have caught this)", cfg.Output.Mode)
+	}
+
+	// M10.A: persistent queue toggle. The expander only checks
+	// Enabled; Dir is already defaulted in applyDefaults so the
+	// template reads a known-good value.
+	if pq := cfg.Output.PersistentQueue; pq != nil && pq.Enabled {
+		v.PersistentQueueEnabled = true
+		v.PersistentQueueDir = pq.Dir
 	}
 
 	platform := resolvePlatform(cfg.Profile, warnW)
@@ -271,10 +320,18 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 
 	// Default exporter lists — RED, when enabled, appends the
 	// span_metrics connector id to the traces pipeline below.
-	defaultExporters := []string{v.ExporterName, "debug"}
-	v.TraceExporters = append([]string{}, defaultExporters...)
-	v.MetricExporters = append([]string{}, defaultExporters...)
-	v.LogExporters = append([]string{}, defaultExporters...)
+	//
+	// M10.B: when Refinery routing is configured, the traces pipeline
+	// swaps the direct Honeycomb exporter for otlp/refinery. Metrics
+	// and logs keep going to Honeycomb directly — Refinery is a
+	// trace-tier sampler, not a fanout gateway.
+	tracesEgress := v.ExporterName
+	if v.RefineryEnabled {
+		tracesEgress = "otlp/refinery"
+	}
+	v.TraceExporters = []string{tracesEgress, "debug"}
+	v.MetricExporters = []string{v.ExporterName, "debug"}
+	v.LogExporters = []string{v.ExporterName, "debug"}
 
 	applyREDView(v, cfg)
 

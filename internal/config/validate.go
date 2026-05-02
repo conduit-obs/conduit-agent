@@ -59,6 +59,7 @@ func (c *AgentConfig) Validate() error {
 	v.validateProfile(c.Profile)
 	v.validateMetrics(c.Metrics)
 	v.validateOverrides(c.Overrides)
+	v.validatePersistentQueue(c.Output.PersistentQueue)
 
 	if len(v.issues) == 0 {
 		return nil
@@ -89,6 +90,12 @@ func (v *validator) validateOutput(o *Output) {
 		}
 		if strings.TrimSpace(o.Honeycomb.APIKey) == "" {
 			v.add("output.honeycomb.api_key", "required; non-empty string (may use ${env:NAME})")
+		}
+		if o.Honeycomb.Traces != nil && o.Honeycomb.Traces.ViaRefinery != nil {
+			if strings.TrimSpace(o.Honeycomb.Traces.ViaRefinery.Endpoint) == "" {
+				v.add("output.honeycomb.traces.via_refinery.endpoint",
+					"required; non-empty OTLP/gRPC URL (e.g. refinery.observability.svc:4317)")
+			}
 		}
 
 	case OutputModeOTLP:
@@ -171,6 +178,51 @@ func (v *validator) validateMetrics(m *Metrics) {
 				fmt.Sprintf(`%q is on the cardinality denylist (CDT0501): %s. See ADR-0006.`, name, reason))
 		}
 	}
+}
+
+// validatePersistentQueue checks the M10.A disk-backed sending_queue
+// settings. Off-by-default semantics: when Enabled is false (or the
+// block is omitted), the rendered exporter uses the upstream in-memory
+// sending_queue and no filestorage extension is rendered. When Enabled
+// is true, applyDefaults fills in DefaultPersistentQueueDir; we still
+// check the result here in case a hand-built struct slipped past.
+func (v *validator) validatePersistentQueue(pq *PersistentQueue) {
+	if pq == nil || !pq.Enabled {
+		return
+	}
+	dir := strings.TrimSpace(pq.Dir)
+	if dir == "" {
+		v.add("output.persistent_queue.dir",
+			"required when persistent_queue.enabled is true; defaults to "+DefaultPersistentQueueDir+
+				" (the deb / rpm / msi packages create that dir with the right ownership). "+
+				"On ephemeral hosts (ECS Fargate, immutable AMIs) leave persistent_queue.enabled: false instead.")
+		return
+	}
+	// Reject relative dirs and obvious tmpfs paths so the failure mode
+	// is "agent refuses to start with a clear error" rather than "queue
+	// silently disappears on every reboot". /tmp is the canonical
+	// tmpfs path; /dev/shm is the explicit shared-memory mount.
+	if !strings.HasPrefix(dir, "/") && !looksLikeWindowsAbsPath(dir) {
+		v.add("output.persistent_queue.dir",
+			fmt.Sprintf("must be an absolute path; got %q", dir))
+	}
+	if dir == "/tmp" || strings.HasPrefix(dir, "/tmp/") || dir == "/dev/shm" || strings.HasPrefix(dir, "/dev/shm/") {
+		v.add("output.persistent_queue.dir",
+			fmt.Sprintf("%q looks like a tmpfs / shared-memory mount; the queue would not survive a reboot. "+
+				"Use a real disk-backed dir (default: %s).", dir, DefaultPersistentQueueDir))
+	}
+}
+
+// looksLikeWindowsAbsPath returns true for the obvious Windows
+// absolute-path shapes (C:\ ... or \\server\share\...). The MSI install
+// puts the default queue dir at %PROGRAMDATA%\Conduit\queue, which
+// resolves to C:\ProgramData\Conduit\queue at install time.
+func looksLikeWindowsAbsPath(p string) bool {
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		c := p[0]
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	}
+	return strings.HasPrefix(p, `\\`)
 }
 
 // validateOverrides checks the structural shape of the overrides block

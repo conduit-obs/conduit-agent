@@ -937,10 +937,157 @@ func TestExpand_Gateway_Profile(t *testing.T) {
 		`hostmetrics:`,
 		`filelog/system:`,
 		`x-tenant: "team-foo"`,
+		// M10.C: TLS-required-by-default contract is rendered
+		// explicitly so `conduit preview` makes the posture visible.
+		`tls:`,
+		`insecure: false`,
 	})
 	if got := pipelineReceivers(t, out, "metrics"); !contains(got, "hostmetrics") {
 		t.Errorf("metrics pipeline missing hostmetrics; got %v", got)
 	}
+}
+
+// M10.C: gateway.insecure: true renders the lab-only TLS opt-out
+// inline (the rendered YAML carries `insecure: true` so operators can
+// see the override at preview time). conduit doctor (M11) flags this
+// as a warning even when the connection succeeds.
+func TestExpand_GatewayProfile_InsecureTLS(t *testing.T) {
+	cfg := &config.AgentConfig{
+		ServiceName:           "checkout",
+		DeploymentEnvironment: "prod",
+		Output: config.Output{
+			Mode: config.OutputModeGateway,
+			Gateway: &config.GatewayOutput{
+				Endpoint: "gateway.internal:4317",
+				Insecure: true,
+			},
+		},
+		Profile: &config.Profile{Mode: config.ProfileModeNone},
+	}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`otlp/gateway:`,
+		`tls:`,
+		`insecure: true`,
+	})
+}
+
+// M10.A: persistent_queue.enabled: true wires the file_storage
+// extension and a sending_queue block on the active exporter, and
+// extends service.extensions so the storage is bound at startup.
+func TestExpand_PersistentQueue_RendersFileStorage(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	cfg.Output.PersistentQueue = &config.PersistentQueue{
+		Enabled: true,
+		Dir:     "/var/lib/conduit/queue",
+	}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`file_storage:`,
+		`directory: "/var/lib/conduit/queue"`,
+		`compaction:`,
+		`on_start: true`,
+		// the active exporter wires sending_queue.storage to the
+		// extension; no other exporter (debug) needs this — the
+		// upstream debug exporter doesn't use sending_queue.
+		`otlphttp/honeycomb:`,
+		`sending_queue:`,
+		`storage: file_storage`,
+		// service.extensions list must include both health_check
+		// (always on) and file_storage (M10.A toggle).
+		`extensions: [health_check, file_storage]`,
+	})
+}
+
+// Persistent queue off (the default) keeps the upstream in-memory
+// sending_queue and never renders the file_storage extension.
+func TestExpand_PersistentQueue_DisabledByDefault(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{
+		`file_storage:`,
+		`storage: file_storage`,
+	})
+	mustContain(t, out, []string{
+		`extensions: [health_check]`,
+	})
+}
+
+// M10.B: honeycomb.traces.via_refinery routes the traces pipeline
+// through an OTLP/gRPC exporter pointed at the Refinery cluster while
+// metrics + logs continue through the direct otlphttp/honeycomb
+// exporter. The refinery exporter carries the same x-honeycomb-team
+// header so Refinery's downstream forward to Honeycomb authenticates
+// the same way.
+func TestExpand_HoneycombViaRefinery_RoutesTracesOnly(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	cfg.Output.Honeycomb.Traces = &config.HoneycombTraces{
+		ViaRefinery: &config.RefineryRouting{
+			Endpoint: "refinery.observability.svc:4317",
+		},
+	}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`otlphttp/honeycomb:`,
+		`otlp/refinery:`,
+		`endpoint: "refinery.observability.svc:4317"`,
+		`x-honeycomb-team:`,
+		// Refinery TLS posture: insecure: false rendered explicitly
+		// even when the operator didn't set it (parallels gateway
+		// mode's M10.C contract).
+		`insecure: false`,
+	})
+
+	// Pipeline routing: traces -> refinery + debug; metrics -> honeycomb
+	// + debug; logs -> honeycomb + debug. RED is on by default so the
+	// span_metrics connector is also in the traces exporter list.
+	traceExp := pipelineExporters(t, out, "traces")
+	if !contains(traceExp, "otlp/refinery") || contains(traceExp, "otlphttp/honeycomb") {
+		t.Errorf("traces pipeline exporters = %v; want otlp/refinery (no otlphttp/honeycomb)", traceExp)
+	}
+	for _, sig := range []string{"metrics", "logs"} {
+		exps := pipelineExporters(t, out, sig)
+		if !contains(exps, "otlphttp/honeycomb") || contains(exps, "otlp/refinery") {
+			t.Errorf("%s pipeline exporters = %v; want otlphttp/honeycomb (no otlp/refinery)", sig, exps)
+		}
+	}
+}
+
+// Refinery + insecure: true is the lab-only opt-out — same posture as
+// gateway TLS (M10.C). The rendered YAML reflects the operator's
+// choice; conduit doctor (M11) flags it as a warning.
+func TestExpand_HoneycombViaRefinery_Insecure(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	cfg.Output.Honeycomb.Traces = &config.HoneycombTraces{
+		ViaRefinery: &config.RefineryRouting{
+			Endpoint: "localhost:4317",
+			Insecure: true,
+		},
+	}
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`otlp/refinery:`,
+		`endpoint: "localhost:4317"`,
+		`insecure: true`,
+	})
 }
 
 func TestExpand_QuotesEmbeddedSpecialChars(t *testing.T) {

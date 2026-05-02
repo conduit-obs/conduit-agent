@@ -54,6 +54,16 @@ func (c *AgentConfig) applyDefaults() {
 		}
 	}
 
+	// PersistentQueue.Dir defaults to DefaultPersistentQueueDir when
+	// the queue is enabled and the operator left Dir empty (M10.A).
+	// We don't materialize the block when Enabled is false because the
+	// downstream expander branches on `pq != nil && pq.Enabled` —
+	// keeping the nil case meaningful avoids spurious "queue disabled
+	// but dir set" config drift.
+	if pq := c.Output.PersistentQueue; pq != nil && pq.Enabled && pq.Dir == "" {
+		pq.Dir = DefaultPersistentQueueDir
+	}
+
 	// A missing profile block means "platform defaults on, auto-detect OS".
 	// We materialize the struct so downstream consumers can read Mode without
 	// nil-checks.

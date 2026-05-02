@@ -184,6 +184,16 @@ type Output struct {
 	Honeycomb *HoneycombOutput `yaml:"honeycomb,omitempty"`
 	OTLP      *OTLPOutput      `yaml:"otlp,omitempty"`
 	Gateway   *GatewayOutput   `yaml:"gateway,omitempty"`
+
+	// PersistentQueue (M10.A) backs each egress exporter's sending_queue
+	// with the upstream filestorage extension instead of the default
+	// in-memory queue. When enabled, OTLP batches that fail to deliver
+	// (network blip, destination 5xx) are persisted to disk and replayed
+	// on restart instead of being lost when the agent process exits.
+	// Off by default because the dir must be writable + survive across
+	// upgrades — operators on read-only roots, ephemeral containers, or
+	// strict-FS-policy hosts opt in deliberately.
+	PersistentQueue *PersistentQueue `yaml:"persistent_queue,omitempty"`
 }
 
 // HoneycombOutput configures direct egress to Honeycomb.
@@ -197,10 +207,83 @@ type HoneycombOutput struct {
 	// https://api.honeycomb.io. Useful for EU tenants (api.eu1.honeycomb.io)
 	// or testing against a sandbox.
 	Endpoint string `yaml:"endpoint,omitempty"`
+
+	// Traces (M10.B) routes the traces pipeline through a customer-
+	// operated Refinery cluster instead of going direct to Honeycomb,
+	// while metrics + logs continue straight to api.honeycomb.io. nil
+	// means "send everything direct" (the default). The Refinery layer
+	// applies tail-based sampling rules and forwards the kept traces to
+	// Honeycomb itself, so this is a routing choice, not a destination
+	// switch.
+	Traces *HoneycombTraces `yaml:"traces,omitempty"`
+}
+
+// HoneycombTraces holds the per-signal routing knobs for direct-to-
+// Honeycomb output. Today the only knob is via_refinery; future field
+// additions (e.g. a sampling-rate hint for the SDK side) attach here so
+// the schema doesn't grow a top-level field per traces concern.
+type HoneycombTraces struct {
+	// ViaRefinery, when set, routes traces through the configured
+	// Refinery endpoint instead of api.honeycomb.io. Refinery accepts
+	// OTLP/gRPC and forwards to Honeycomb on the same API key after
+	// applying its sampling rules. Nil = send traces direct.
+	ViaRefinery *RefineryRouting `yaml:"via_refinery,omitempty"`
+}
+
+// RefineryRouting points the traces pipeline at a Refinery cluster.
+// Required when set; validation rejects empty Endpoint.
+type RefineryRouting struct {
+	// Endpoint is Refinery's OTLP/gRPC URL. Required. Typical values:
+	//   https://refinery.observability.svc:4317     (in-cluster TLS)
+	//   refinery.example.com:4317                   (operator-managed)
+	// Schemes other than https produce a doctor (M11) warning unless
+	// Insecure: true is also set.
+	Endpoint string `yaml:"endpoint"`
+
+	// Insecure skips TLS verification on the Refinery connection.
+	// Default false; setting true is a lab-only override that doctor
+	// (M11) flags as a warning even on success.
+	Insecure bool `yaml:"insecure,omitempty"`
+}
+
+// PersistentQueue toggles disk-backed sending_queue for the configured
+// egress exporter (M10.A). When enabled, the upstream filestorage
+// extension persists in-flight OTLP batches under Dir; on restart the
+// exporter resumes draining the queue instead of dropping anything that
+// hadn't shipped before shutdown.
+//
+// Trade-offs Conduit doesn't hide:
+//
+//   - Dir must be writable, survive upgrades, and not be on a tmpfs
+//     mount (defeats the purpose). The default is /var/lib/conduit/queue,
+//     which the deb / rpm packages create with the right ownership.
+//   - On Windows the default is %PROGRAMDATA%\Conduit\queue (set by
+//     the MSI install — see deploy/windows/wix/conduit.wxs).
+//   - On ECS Fargate / immutable container hosts there's no useful
+//     persistent dir; PersistentQueue stays off and operators rely on
+//     the SDK's retry budget.
+//
+// Sized for V0: queue_size: 1000 batches per signal (matches upstream
+// default), num_consumers: 4. Operators tune via the overrides:
+// escape hatch (ADR-0012); first-class knobs land if tuning patterns
+// emerge.
+type PersistentQueue struct {
+	// Enabled toggles the disk-backed queue. Default false.
+	Enabled bool `yaml:"enabled"`
+
+	// Dir is the on-disk filestorage directory. Optional; defaults to
+	// DefaultPersistentQueueDir when Enabled is true and Dir is empty.
+	Dir string `yaml:"dir,omitempty"`
 }
 
 // DefaultHoneycombEndpoint is the production US Honeycomb ingest URL.
 const DefaultHoneycombEndpoint = "https://api.honeycomb.io"
+
+// DefaultPersistentQueueDir is the on-disk filestorage directory used
+// when persistent_queue.enabled is true and persistent_queue.dir is
+// empty. Matches /var/lib/conduit/ created by the linux nfpms maintainer
+// scripts; Windows installs override via the MSI.
+const DefaultPersistentQueueDir = "/var/lib/conduit/queue"
 
 // OTLPOutput configures generic OTLP/HTTP egress. Use this for any
 // OTLP-HTTP destination Conduit doesn't yet ship a named preset for —
@@ -242,6 +325,14 @@ type GatewayOutput struct {
 	// Use this for gateway-specific auth (e.g. an API key) when the gateway
 	// requires one.
 	Headers map[string]string `yaml:"headers,omitempty"`
+
+	// Insecure skips TLS verification on the gateway connection (M10.C).
+	// Default false — the rendered exporter ships an explicit
+	// `tls.insecure: false` block so the TLS-required-by-default contract
+	// is visible in `conduit preview` output. Setting true is a lab-only
+	// override per ADR-0009; conduit doctor (M11) flags it as a warning
+	// even when the connection succeeds (AC-06.3).
+	Insecure bool `yaml:"insecure,omitempty"`
 }
 
 // Metrics is the umbrella for metric-pipeline tuning. V0 ships exactly

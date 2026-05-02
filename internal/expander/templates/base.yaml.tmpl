@@ -232,6 +232,28 @@ exporters:
     headers:
       x-honeycomb-team: {{ .Output.Honeycomb.APIKey | q }}
     compression: gzip
+{{- if .PersistentQueueEnabled }}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+{{- end }}
+{{- if .RefineryEnabled }}
+  # M10.B: traces flow through this exporter instead of going direct
+  # to Honeycomb. Refinery applies tail-based sampling rules and
+  # forwards kept traces to Honeycomb on the same API key. Metrics +
+  # logs continue through otlphttp/honeycomb above.
+  otlp/refinery:
+    endpoint: {{ .RefineryEndpoint | q }}
+    headers:
+      x-honeycomb-team: {{ .Output.Honeycomb.APIKey | q }}
+    tls:
+      insecure: {{ .RefineryInsecure }}
+{{- if .PersistentQueueEnabled }}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+{{- end }}
+{{- end }}
 {{- else if eq .Output.Mode "otlp" }}
   otlphttp/otlp:
     endpoint: {{ .Output.OTLP.Endpoint | q }}
@@ -246,6 +268,11 @@ exporters:
     tls:
       insecure: true
 {{- end }}
+{{- if .PersistentQueueEnabled }}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+{{- end }}
 {{- else if eq .Output.Mode "gateway" }}
   otlp/gateway:
     endpoint: {{ .Output.Gateway.Endpoint | q }}
@@ -254,6 +281,18 @@ exporters:
 {{- range $k, $v := .Output.Gateway.Headers }}
       {{ $k }}: {{ $v | q }}
 {{- end }}
+{{- end }}
+    # M10.C: TLS is required by default for gateway egress (AC-06.3).
+    # `insecure: false` is rendered explicitly so `conduit preview`
+    # makes the contract visible; `insecure: true` is the lab-only
+    # opt-in that conduit doctor (M11) flags as a warning even when
+    # the connection succeeds.
+    tls:
+      insecure: {{ .GatewayInsecure }}
+{{- if .PersistentQueueEnabled }}
+    sending_queue:
+      enabled: true
+      storage: file_storage
 {{- end }}
 {{- end }}
   debug:
@@ -296,12 +335,25 @@ connectors:
 # endpoint to hit. Bound to 0.0.0.0 on every profile because the endpoint
 # only reports collector liveness — there is no telemetry payload to
 # protect, and host-mode operators can still reach it via 127.0.0.1.
+#
+# file_storage (M10.A) is rendered only when output.persistent_queue
+# is enabled. It backs every active exporter's sending_queue with disk
+# so OTLP batches survive restarts and crashes; on_start compaction
+# reclaims tombstoned space from previous runs.
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+{{- if .PersistentQueueEnabled }}
+  file_storage:
+    directory: {{ .PersistentQueueDir | q }}
+    timeout: 1s
+    compaction:
+      directory: {{ .PersistentQueueDir | q }}
+      on_start: true
+{{- end }}
 
 service:
-  extensions: [health_check]
+  extensions: [health_check{{ if .PersistentQueueEnabled }}, file_storage{{ end }}]
   pipelines:
     traces:
       receivers:
