@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * Conduit Quickstart — design tokens.
+ *
+ * The wizard is a single linear flow on a calm slate background. The accent
+ * color (indigo-500) is reserved for primary CTAs and active progress steps,
+ * never for body text. Errors use a red-50 / red-700 pair; success is
+ * emerald-50 / emerald-700. We deliberately avoid Tailwind's amber/orange
+ * palette to keep the surface monotone-with-one-accent.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+  --conduit-accent: oklch(0.62 0.18 281);
+}
+
+@theme {
+  --color-accent: var(--conduit-accent);
+}
+
+/* Inline code chips inside paragraphs — distinct from the standalone
+ * code blocks (which the CodeBlock component styles directly). */
+code:not(pre code) {
+  background-color: oklch(0.97 0.01 240);
+  border: 1px solid oklch(0.92 0.01 240);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    "Liberation Mono",
+    monospace;
+}
+
+/* Keyboard focus rings — visible but not loud. Tailwind's default ring is
+ * fine for buttons; this targets card-like clickables that don't carry
+ * their own ring. */
+[role="button"]:focus-visible,
+[role="radio"]:focus-visible {
+  outline: 2px solid var(--conduit-accent);
+  outline-offset: 2px;
+}
+
+/* Smooth scroll between steps so the next-step transition feels guided
+ * rather than jumpy. */
+html {
+  scroll-behavior: smooth;
+}

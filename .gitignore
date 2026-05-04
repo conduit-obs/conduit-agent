@@ -2,6 +2,12 @@
 /bin/
 /dist/
 /build/
+
+# Quickstart site (web/) — Node/Vite/TS outputs
+web/node_modules/
+web/dist/
+web/.vite/
+web/*.tsbuildinfo
 *.exe
 *.test
 *.out

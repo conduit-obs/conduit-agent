@@ -1,0 +1,67 @@
+name: Quickstart Site
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - "dashboards/**"
+      - ".github/workflows/quickstart.yml"
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "dashboards/**"
+      - ".github/workflows/quickstart.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  # Allow one PR build per branch but cancel superseded runs to keep
+  # the wizard publish lane snappy.
+  group: quickstart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc -b
+      - name: Build
+        # VITE_BASE matches the gh-pages project sub-path. Override via
+        # repo variable QUICKSTART_BASE if hosting under a custom domain.
+        env:
+          VITE_BASE: ${{ vars.QUICKSTART_BASE || '/conduit-agent/' }}
+        run: npm run build
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
