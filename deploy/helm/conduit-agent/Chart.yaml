@@ -13,7 +13,7 @@ type: application
 # is published to oci://ghcr.io/conduit-obs/charts/conduit-agent (M5.D;
 # registry venue per ADR-0019). The first published version will be
 # v0.0.1 once the publishing recipe runs against a release tag.
-version: 0.0.1
+version: 0.0.2
 
 # Pinned upstream Conduit binary version this chart's defaults assume.
 # The image tag in values.yaml may override; appVersion is what shows in
