@@ -55,7 +55,7 @@ export type WizardState = {
   boardResult:
     | { kind: "idle" }
     | { kind: "running" }
-    | { kind: "ok"; url: string }
+    | { kind: "ok"; url: string; skipped: { name: string; reason: string }[] }
     | { kind: "error"; message: string; cors: boolean };
 };
 

@@ -63,7 +63,7 @@ export function BoardStep({
       const result = await client.importBoard(board, (p) => setProgress(p));
       dispatch({
         type: "SET_BOARD_RESULT",
-        result: { kind: "ok", url: result.boardUrl },
+        result: { kind: "ok", url: result.boardUrl, skipped: result.skipped },
       });
     } catch (e) {
       const ie = e as ImportError;
@@ -223,18 +223,45 @@ function ResultView({
 }) {
   if (result.kind === "ok") {
     return (
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-5 space-y-2">
-        <div className="text-sm font-semibold text-emerald-900">
-          ✓ Board created.
+      <div className="space-y-3">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-5 space-y-2">
+          <div className="text-sm font-semibold text-emerald-900">
+            ✓ Board created.
+          </div>
+          <a
+            href={result.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sm text-emerald-800 underline break-all"
+          >
+            {result.url}
+          </a>
         </div>
-        <a
-          href={result.url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm text-emerald-800 underline break-all"
-        >
-          {result.url}
-        </a>
+        {result.skipped.length > 0 ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-5 space-y-3">
+            <div className="text-sm font-semibold text-amber-900">
+              {result.skipped.length} panel
+              {result.skipped.length === 1 ? "" : "s"} skipped
+            </div>
+            <p className="text-sm text-amber-900 leading-relaxed">
+              These panels reference columns or datasets that don't exist
+              in your environment yet. The most common cause is "the agent
+              hasn't seen that data" — e.g. a Lima VM with no swap won't
+              have <code>system.paging.utilization</code>, so that panel
+              gets dropped. Once your fleet starts emitting the metric,
+              re-import the board (or add the panel by hand from the
+              Honeycomb UI).
+            </p>
+            <ul className="text-sm text-amber-900 space-y-1.5 list-disc list-inside">
+              {result.skipped.map((s) => (
+                <li key={s.name}>
+                  <span className="font-medium">{s.name}</span>
+                  <span className="text-amber-800"> — {s.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     );
   }

@@ -16,10 +16,15 @@
 
 import type { Board, BoardPanel } from "./boards";
 
+export type SkippedPanel = {
+  name: string;
+  reason: string;
+};
+
 export type ImportProgress =
   | { stage: "resolving"; current: number; total: number }
   | { stage: "creating-board" }
-  | { stage: "done"; boardUrl: string };
+  | { stage: "done"; boardUrl: string; skipped: SkippedPanel[] };
 
 export type ImportError = {
   message: string;
@@ -54,6 +59,7 @@ export function newHoneycombClient(opts: {
         (p): p is BoardPanel & { type: "query" } => p.type === "query",
       );
       const queryIds: { panel: BoardPanel & { type: "query" }; id: string }[] = [];
+      const skipped: SkippedPanel[] = [];
 
       for (let i = 0; i < queryPanels.length; i++) {
         const panel = queryPanels[i];
@@ -78,40 +84,75 @@ export function newHoneycombClient(opts: {
         }
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          throw {
-            message: `POST /1/queries/${panel.dataset} failed: ${res.status} ${res.statusText} ${text}`,
-            cors: false,
-            curlScript: buildCurlScript(opts, board, apiHost),
-          } as ImportError;
+          // Auth / permission failures fail the whole import — there's
+          // no point continuing if the key can't talk to the API at
+          // all. Anything else (overwhelmingly 422 validation: column
+          // missing, dataset missing, derived column unresolved) is
+          // treated as a per-panel skip: we capture the reason and
+          // build the board with whatever else resolved. That keeps a
+          // single board JSON workable across hosts where some metrics
+          // legitimately don't exist (no swap, no NIC bonding, etc.).
+          if (res.status === 401 || res.status === 403) {
+            throw {
+              message: `Honeycomb rejected the API key on POST /1/queries/${panel.dataset}: ${res.status} ${res.statusText} ${text}. Confirm the key has the "Manage Boards" permission and matches the team/env you sent data to.`,
+              cors: false,
+              curlScript: buildCurlScript(opts, board, apiHost),
+            } as ImportError;
+          }
+          skipped.push({
+            name: panel.name,
+            reason: summarizeApiError(res.status, text),
+          });
+          continue;
         }
         const json = (await res.json()) as { id: string };
         queryIds.push({ panel, id: json.id });
       }
 
+      // If literally every query failed validation, the board would be
+      // empty — bail with a more useful error than "you got an empty
+      // board." Most likely cause: wrong dataset slugs, or the agent
+      // hasn't sent any data yet so no columns exist at all.
+      if (queryIds.length === 0 && skipped.length > 0) {
+        throw {
+          message: `All ${skipped.length} query panel(s) were rejected by Honeycomb. Most often this means the agent hasn't sent any data yet (no columns exist in the dataset), or the dataset slug in the board doesn't match what your agent is writing to. First reason: ${skipped[0].reason}`,
+          cors: false,
+          curlScript: buildCurlScript(opts, board, apiHost),
+        } as ImportError;
+      }
+
       onProgress?.({ stage: "creating-board" });
       // Resolve the board: replace each query panel's query_spec with
-      // the matching query_id; keep markdown panels as-is.
+      // the matching query_id; keep markdown panels as-is. Panels that
+      // were skipped above (validation failure, missing column, etc.)
+      // are dropped from the rendered board entirely — Honeycomb has no
+      // "placeholder panel" concept, and an empty panel would be more
+      // confusing than a missing one.
       const resolvedBoard = {
         name: board.name,
         description: board.description,
         tags: board.tags,
         column_layout: "multi",
-        panels: board.panels.map((p) => {
+        panels: board.panels.flatMap<Record<string, unknown>>((p) => {
           if (p.type === "text") {
-            return {
-              type: "text_panel",
-              text_panel: { body: p.content },
-              ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
-            };
+            return [
+              {
+                type: "text_panel",
+                text_panel: { body: p.content },
+                ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
+              },
+            ];
           }
           const match = queryIds.find((q) => q.panel === p);
-          if (!match) throw new Error(`unmatched query panel ${p.name}`);
-          return {
-            type: "query",
-            query_id: match.id,
-            ...(p.name ? { query_annotation_id: match.id } : {}),
-            ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
-          };
+          if (!match) return [];
+          return [
+            {
+              type: "query",
+              query_id: match.id,
+              ...(p.name ? { query_annotation_id: match.id } : {}),
+              ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
+            },
+          ];
         }),
       };
 
@@ -142,7 +183,7 @@ export function newHoneycombClient(opts: {
         created.links?.board_url ??
         `https://ui.honeycomb.io/${opts.team}/environments/${opts.env}/boards/${created.id}`;
 
-      const done = { stage: "done" as const, boardUrl };
+      const done = { stage: "done" as const, boardUrl, skipped };
       onProgress?.(done);
       return done;
     },
@@ -233,6 +274,28 @@ function boardManifestPlaceholder(board: Board): unknown {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// summarizeApiError pulls the most-useful sentence out of a Honeycomb
+// 4xx body so the wizard can show "missing column 'system.paging.utilization'"
+// instead of the full RFC-7807 problem document. Honeycomb's validation
+// errors come back as
+//   { type_detail: [{ code, description }, ...], error: "..." }
+// We pick the first type_detail.description if present, then fall back
+// to .error, then to the raw body.
+function summarizeApiError(status: number, body: string): string {
+  try {
+    const j = JSON.parse(body) as {
+      type_detail?: { code?: string; description?: string }[];
+      error?: string;
+    };
+    const detail = j.type_detail?.[0]?.description;
+    if (detail) return `${status}: ${detail}`;
+    if (j.error) return `${status}: ${j.error}`;
+  } catch {
+    // not JSON; fall through
+  }
+  return `${status}: ${body.slice(0, 200) || "(empty body)"}`;
 }
 
 // toWireQuerySpec normalizes a query_spec from the human-editable form
