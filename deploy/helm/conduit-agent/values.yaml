@@ -110,6 +110,40 @@ conduit:
   profileMode: k8s
 
 # ---------------------------------------------------------------------------
+# OBI — OpenTelemetry eBPF Instrumentation (ADR-0020).
+#
+# When enabled:
+#   - the rendered conduit.yaml carries `obi.enabled: true` so the agent
+#     activates the OBI receiver,
+#   - the daemonset's container gets the eBPF capability set
+#     (CAP_SYS_ADMIN, CAP_DAC_READ_SEARCH, CAP_NET_RAW, CAP_SYS_PTRACE,
+#     CAP_PERFMON, CAP_BPF, plus CHECKPOINT_RESTORE for kernel
+#     compatibility per upstream's k8s example), and
+#   - hostPID is forced on (OBI needs a host-wide process view to
+#     attach probes; matches how hostmetrics-with-hostMounts already
+#     uses hostPID under daemonset.hostMounts).
+#
+# Default off so the chart's privilege posture stays conservative —
+# operators flip the flag deliberately. ADR-0020 sub-decision 4 sets
+# the corresponding conduit.yaml default ON for the k8s profile, but
+# that conduit.yaml default is irrelevant in this chart: the chart's
+# rendered `obi: { enabled: ... }` block always reflects what the
+# operator set here, which is what the daemonset spec also matches.
+# Said differently: we don't accidentally grant eBPF caps based on a
+# yaml default; the operator sets `obi.enabled=true` here, that's
+# auditable in their values file, and that's the single source of
+# truth for both the conduit.yaml content AND the pod's security
+# context.
+obi:
+  enabled: false
+  # replaceSpanMetricsConnector mirrors
+  # conduit.yaml's obi.replace_span_metrics_connector: when true,
+  # OBI is the sole source of RED metrics and the M8 span_metrics
+  # connector is suppressed. Default false (both flow; OBI's
+  # native instrumentation.scope = "obi" tag disambiguates).
+  replaceSpanMetricsConnector: false
+
+# ---------------------------------------------------------------------------
 # Extra environment variables injected into the conduit container. The
 # typical use is feeding vendor auth tokens to output.otlp.headers or to
 # overrides:, where the rendered conduit.yaml references them via

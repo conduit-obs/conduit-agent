@@ -74,6 +74,31 @@ func DefaultSettings(buildInfo component.BuildInfo) otelcol.CollectorSettings {
 	}
 }
 
+// HasReceiver reports whether a receiver factory with the given type
+// (e.g. "obi", "hostmetrics") is registered in this binary. Doctor
+// (M11, ADR-0020) calls this to differentiate "operator enabled OBI
+// but the binary was built without it" from "OBI is wired in and the
+// only thing left to check is the host's eBPF readiness". Returns
+// false when the factory map fails to build, which would itself be a
+// much bigger problem caught by `conduit run` directly.
+//
+// We rebuild the factories map on every call rather than caching;
+// the cost is negligible (each factory's New is a tiny constructor)
+// and skipping the cache means there's nothing to invalidate when
+// future builds inject components dynamically (e.g. via plugins).
+func HasReceiver(typeName string) bool {
+	factories, err := components()
+	if err != nil {
+		return false
+	}
+	for typ := range factories.Receivers {
+		if typ.String() == typeName {
+			return true
+		}
+	}
+	return false
+}
+
 // Run starts the embedded OTel Collector with the given settings and blocks
 // until ctx is canceled or the collector exits with an error. Callers must
 // have populated settings.ConfigProviderSettings.ResolverSettings.URIs (e.g.

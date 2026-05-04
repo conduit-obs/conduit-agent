@@ -244,6 +244,66 @@ specific path and the matching glob is empty.
 
 ---
 
+## CDT0204 — receiver-obi
+
+**What it checks**: the OpenTelemetry eBPF Instrumentation receiver
+([ADR-0020](../adr/adr-0020.md)) is ready to run on this host. The
+check is `SKIP` when `obi.enabled` is false, so non-OBI installs see
+no extra noise. When OBI is enabled the check fires five preflights:
+
+1. **Linux only.** OBI is Linux-only by upstream design; on Darwin /
+   Windows / unknown GOOS the check is a single `FAIL` with the
+   remediation "set `obi.enabled: false` or run on Linux".
+2. **Binary has the OBI receiver compiled in.** Catches the case
+   where `obi.enabled: true` was set but the Conduit binary was
+   built without `go.opentelemetry.io/obi` in the OCB manifest. The
+   remediation calls out the deferred build-pipeline work in
+   ADR-0020.
+3. **Kernel ≥ 5.8** (or RHEL-family ≥ 4.18 with backports). Reads
+   `/proc/sys/kernel/osrelease` and `/etc/os-release` to detect the
+   distribution family. Kernels below the floor get `FAIL` with the
+   exact version found and the floor for the detected family.
+4. **BTF type info available.** Stats `/sys/kernel/btf/vmlinux`. A
+   missing file is `WARN` (some kernels have embedded BTF; OBI may
+   still load) rather than `FAIL`, but the absence is unusual on
+   modern distributions.
+5. **Required eBPF capabilities present.** Reads `CapEff:` from
+   `/proc/self/status` and checks for `CAP_SYS_ADMIN`,
+   `CAP_DAC_READ_SEARCH`, `CAP_NET_RAW`, `CAP_SYS_PTRACE`,
+   `CAP_PERFMON`, `CAP_BPF`. Running as root short-circuits this to
+   `PASS` (root has all caps implicitly). Missing caps get `FAIL`
+   with the exact set that's absent.
+
+**Why it matters**: OBI fails to load with cryptic eBPF errors when
+the kernel, BTF, or caps don't line up. Catching the missing piece at
+`conduit doctor` time turns a 5-minute startup-log triage into a
+single line of remediation.
+
+**How to fix**:
+
+- **Capability missing (host install)**: re-run the installer with
+  `--with-obi` so the systemd drop-in
+  `/etc/systemd/system/conduit.service.d/obi.conf` grants the full
+  set, then `sudo systemctl restart conduit`.
+- **Capability missing (Helm)**: set `obi.enabled: true` in your
+  Helm values; the chart adds the matching `securityContext.
+  capabilities.add` block to the daemonset.
+- **Kernel too old**: upgrade the OS. Ubuntu 18.04 / RHEL 7 cannot
+  run OBI; on those hosts set `obi.enabled: false` and rely on
+  SDK-instrumented telemetry through the OTLP receiver.
+- **Binary built without OBI**: rebuild Conduit with `go.opentelemetry.
+  io/obi` added to `builder-config.yaml`, OR set `obi.enabled:
+  false` and rely on `span_metrics` for RED metrics. The OCB
+  pipeline that links OBI in is staged behind a follow-up decision
+  per ADR-0020 § "Open question: build pipeline".
+
+**When to escalate**: when every preflight passes but the agent still
+logs eBPF errors at startup. That's an OBI-internal compatibility
+issue; capture the `journalctl -u conduit -n 200` output and file an
+issue against `open-telemetry/opentelemetry-ebpf-instrumentation`.
+
+---
+
 ## CDT0403 — version-compat
 
 **What it checks**: an informational PASS that prints the conduit

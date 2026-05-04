@@ -86,4 +86,20 @@ func (c *AgentConfig) applyDefaults() {
 	if c.Metrics.RED.CardinalityLimit == 0 {
 		c.Metrics.RED.CardinalityLimit = DefaultREDCardinalityLimit
 	}
+
+	// OBI defaults: pre-fill Enabled per the profile so downstream
+	// readers (expander, doctor, helm-chart docs) always see a
+	// concrete bool rather than "depends on profile". K8s defaults
+	// to true; every other resolved profile defaults to false. We
+	// materialize the OBI struct itself when omitted so the
+	// expander's branch on cfg.OBI != nil remains a stable contract
+	// across "operator left it out" and "operator wrote `obi:
+	// {enabled: false}`". See ADR-0020 sub-decision 4.
+	if c.OBI == nil {
+		c.OBI = &OBI{}
+	}
+	if c.OBI.Enabled == nil {
+		def := obiDefaultForProfile(c.Profile)
+		c.OBI.Enabled = &def
+	}
 }

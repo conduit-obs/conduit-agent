@@ -11,6 +11,12 @@ landing in Honeycomb" in the time noted.
 | Kubernetes (any cluster) | 20 min | [`kubernetes.md`](kubernetes.md) |
 | Windows Server / Windows 11 | 15 min | [`windows.md`](windows.md) |
 
+After the platform install, optionally:
+
+| Add-on | Time | Guide |
+|---|---|---|
+| **OBI — zero-code app instrumentation** (Linux only) | 10 min | [`obi.md`](obi.md) |
+
 ## What you'll need regardless
 
 - A Honeycomb ingest API key (any plan, including the free tier).

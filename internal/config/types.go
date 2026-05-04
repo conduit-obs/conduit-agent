@@ -40,6 +40,22 @@ type AgentConfig struct {
 	// documented dimension set, 5000-combination cardinality limit).
 	Metrics *Metrics `yaml:"metrics,omitempty"`
 
+	// OBI toggles the [OpenTelemetry eBPF Instrumentation
+	// project](https://opentelemetry.io/docs/zero-code/obi/) — zero-code
+	// application instrumentation that captures HTTP / gRPC /
+	// JSON-RPC / database RED metrics and distributed trace spans
+	// without code changes. Linux-only; the validator rejects
+	// obi.enabled: true on non-Linux profiles. Off by default
+	// everywhere except profile.mode=k8s, where applyDefaults flips
+	// it on (k8s is OBI's strongest auto-discovery path; everywhere
+	// else the cap-grant decision belongs to the operator). See
+	// docs/adr/adr-0020.md for the integration rationale; the curated
+	// schema is deliberately tiny (enabled + replace_span_metrics_connector)
+	// because OBI's own auto-discovery handles the common case and ADR-0012
+	// says "promote knobs when patterns emerge". Anything beyond these two
+	// fields goes through Overrides (overrides.receivers.obi.<...>).
+	OBI *OBI `yaml:"obi,omitempty"`
+
 	// Overrides is the documented escape hatch for advanced users who need
 	// to reach upstream OTel Collector knobs Conduit has not surfaced as
 	// first-class fields. Any key under here is spliced verbatim into the
@@ -141,6 +157,63 @@ func (p *Profile) SystemLogsEnabled() bool {
 		return true
 	}
 	return *p.SystemLogs
+}
+
+// OBI toggles the OpenTelemetry eBPF Instrumentation receiver. The
+// schema is deliberately minimal — two fields covering the two most
+// consequential decisions (turn it on; suppress the M8 RED connector
+// when OBI replaces it). Anything more elaborate (instrumentation
+// targets, OBI features, k8s metadata enrichment, discovery poll
+// interval) goes through AgentConfig.Overrides as overrides.receivers.
+// obi.<...>, deep-merged at startup. See docs/adr/adr-0020.md for
+// why the curated surface stays this small in V0.1.
+type OBI struct {
+	// Enabled toggles the OBI receiver. Pointer so applyDefaults can
+	// distinguish "field omitted" (apply profile default — k8s -> true,
+	// every other profile -> false) from "set to false" (operator
+	// explicitly disabled OBI on a profile that would otherwise default
+	// it on). Validation rejects Enabled = true on non-Linux profiles
+	// because OBI is Linux-only by upstream design.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// ReplaceSpanMetricsConnector, when true, suppresses the M8
+	// span_metrics connector emission entirely so OBI is the only
+	// source of RED metrics. Default false (both sources flow; OBI's
+	// native instrumentation.scope = "obi" tag disambiguates at query
+	// time). Validation rejects this being true while Enabled is false
+	// — the configuration would have no effect, surface that as an
+	// error rather than letting it silently drift.
+	ReplaceSpanMetricsConnector bool `yaml:"replace_span_metrics_connector,omitempty"`
+}
+
+// OBIEnabled reports the effective on/off state of the OBI receiver
+// given the resolved Profile mode. The defaulting rule is "off
+// everywhere except k8s" (per ADR-0020 sub-decision 4); applyDefaults
+// runs first and pre-fills o.Enabled when it was nil, so by the time
+// the expander asks this method o.Enabled is always non-nil. The
+// nil-receiver / nil-Enabled paths exist for tests that hand-build an
+// AgentConfig without going through Load/Parse.
+func (o *OBI) OBIEnabled(p *Profile) bool {
+	if o != nil && o.Enabled != nil {
+		return *o.Enabled
+	}
+	return obiDefaultForProfile(p)
+}
+
+// obiDefaultForProfile is the central place that encodes the
+// per-profile default. Same place applyDefaults reads from, same place
+// OBIEnabled reads from when the operator omitted the block. K8s gets
+// true; every other resolved profile gets false. Profile.Mode = auto
+// is treated as "false until expander resolves auto -> goos" because
+// auto-resolution happens at expand time and the runtime GOOS is the
+// signal we'd want at that point — tests that hand-build cfg with
+// mode=auto get false from this helper, which is the safe default for
+// non-Linux test hosts.
+func obiDefaultForProfile(p *Profile) bool {
+	if p == nil {
+		return false
+	}
+	return p.Mode == ProfileModeK8s
 }
 
 // OutputMode is the discriminator for the Output block. Three modes

@@ -53,3 +53,19 @@ data:
       # runAsRoot security context live in templates/clusterrole.yaml
       # and templates/daemonset.yaml.
       mode: {{ .Values.conduit.profileMode | quote }}
+
+    # OBI (OpenTelemetry eBPF Instrumentation) — see ADR-0020.
+    #
+    # Always emitted explicitly (never omitted) so the chart's
+    # values.obi.enabled is the single source of truth: the
+    # rendered conduit.yaml's obi.enabled and the daemonset's
+    # securityContext.capabilities both come from the same input.
+    # Without an explicit emission, the agent's per-profile default
+    # (k8s -> true) would diverge from a chart that has
+    # obi.enabled=false in values.yaml — quietly granting eBPF
+    # caps without the operator asking for them.
+    obi:
+      enabled: {{ .Values.obi.enabled }}
+      {{- if .Values.obi.replaceSpanMetricsConnector }}
+      replace_span_metrics_connector: true
+      {{- end }}

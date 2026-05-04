@@ -58,6 +58,7 @@ func (c *AgentConfig) Validate() error {
 	v.validateOutput(&c.Output)
 	v.validateProfile(c.Profile)
 	v.validateMetrics(c.Metrics)
+	v.validateOBI(c.OBI, c.Profile)
 	v.validateOverrides(c.Overrides)
 	v.validatePersistentQueue(c.Output.PersistentQueue)
 
@@ -177,6 +178,49 @@ func (v *validator) validateMetrics(m *Metrics) {
 			v.add(fmt.Sprintf("metrics.red.extra_resource_dimensions[%d]", i),
 				fmt.Sprintf(`%q is on the cardinality denylist (CDT0501): %s. See ADR-0006.`, name, reason))
 		}
+	}
+}
+
+// validateOBI enforces the two cross-field rules ADR-0020 calls out:
+//
+//  1. obi.enabled: true is rejected on non-Linux profiles because OBI
+//     is Linux-only by upstream design (kernel 5.8+ / RHEL-family
+//     4.18+, libbpf, eBPF caps). Profile.Mode = auto is allowed at
+//     validation time because the expander resolves auto -> runtime.
+//     GOOS at expand time and the same rule fires there if the host
+//     is non-Linux.
+//
+//  2. obi.replace_span_metrics_connector: true is rejected when
+//     obi.enabled: false (the toggle would have no effect — surface
+//     the misconfiguration eagerly so it's caught before deploy).
+//
+// The "binary lacks OBI" case (Conduit was built without the OBI
+// receiver compiled in) is doctor's job to surface, not the validator's
+// — the configuration itself is structurally valid, the runtime
+// environment isn't.
+func (v *validator) validateOBI(o *OBI, p *Profile) {
+	if o == nil {
+		return
+	}
+	enabled := false
+	if o.Enabled != nil {
+		enabled = *o.Enabled
+	}
+
+	if enabled && p != nil {
+		switch p.Mode {
+		case ProfileModeDarwin, ProfileModeWindows, ProfileModeNone:
+			v.add("obi.enabled",
+				fmt.Sprintf("OBI is Linux-only (eBPF receiver); current profile.mode is %q. "+
+					"Remove the obi: block, set obi.enabled: false, or run on Linux. See ADR-0020.",
+					string(p.Mode)))
+		}
+	}
+
+	if !enabled && o.ReplaceSpanMetricsConnector {
+		v.add("obi.replace_span_metrics_connector",
+			"set true while obi.enabled is false; the flag would have no effect. "+
+				"Either set obi.enabled: true, or remove this field.")
 	}
 }
 

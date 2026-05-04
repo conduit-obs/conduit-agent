@@ -74,6 +74,17 @@ That's it. The chart:
 For chart internals (`values.yaml`, RBAC, host bind mounts), see
 [`deploy/helm/conduit-agent/`](../../deploy/helm/conduit-agent/README.md).
 
+> **Optional: zero-code application instrumentation (OBI).** If you
+> want HTTP / gRPC / database RED metrics + traces from every service
+> on every node *without* adding an OTel SDK to your apps, set
+> `obi.enabled=true` in the chart values. The chart adds the eBPF
+> capability set and `hostPID: true` to the daemonset, and the
+> rendered `conduit.yaml` activates the OBI receiver. See the
+> [OBI guide](obi.md) for the full walkthrough; see
+> [ADR-0020](../adr/adr-0020.md) for why it's off by default in V0.1
+> (the build pipeline that links OBI into the binary is staged behind
+> a follow-up decision).
+
 ### Pinning the chart version
 
 Don't use `latest` in production — `helm pull` the chart into your

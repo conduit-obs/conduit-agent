@@ -1321,6 +1321,110 @@ func TestExpand_UnknownMode(t *testing.T) {
 	}
 }
 
+// ADR-0020: when OBI is enabled, the rendered output gains a
+// `receivers.obi:` block AND `obi` joins the traces + metrics pipeline
+// receiver lists. On the k8s profile, the block also enables k8s
+// metadata extraction (matching k8sattributes for OTLP traffic).
+func TestExpand_OBI_K8sDefault(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"\n  obi:\n",
+		"meter_provider:",
+		"features: [application]",
+		"attributes:",
+		"kubernetes:",
+		"enable: true",
+	})
+	if got := pipelineReceivers(t, out, "traces"); !contains(got, "obi") {
+		t.Errorf("traces pipeline must include obi receiver; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); !contains(got, "obi") {
+		t.Errorf("metrics pipeline must include obi receiver; got %v", got)
+	}
+}
+
+// On non-k8s Linux profiles, the receivers.obi block omits the
+// kubernetes metadata block — there's no in-cluster API to read.
+// Operators on those platforms who need k8s tagging supply it
+// through overrides:.
+func TestExpand_OBI_LinuxOmitsKubernetesAttrs(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeLinux})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"\n  obi:\n",
+		"features: [application]",
+	})
+	mustNotContain(t, out, []string{
+		"kubernetes:\n        enable: true",
+	})
+}
+
+// OBI off (the default for non-k8s profiles) leaves the rendered
+// config exactly as it was pre-ADR-0020 — no obi receiver block, no
+// pipeline membership.
+func TestExpand_OBI_DisabledOmitsBlock(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeLinux})
+	off := false
+	cfg.OBI = &config.OBI{Enabled: &off}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if strings.Contains(out, "\n  obi:\n") {
+		t.Errorf("rendered output should NOT contain obi receiver block when disabled; got it")
+	}
+	if got := pipelineReceivers(t, out, "traces"); contains(got, "obi") {
+		t.Errorf("traces pipeline must NOT include obi when disabled; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); contains(got, "obi") {
+		t.Errorf("metrics pipeline must NOT include obi when disabled; got %v", got)
+	}
+}
+
+// ADR-0020 sub-decision 3: obi.replace_span_metrics_connector: true
+// suppresses the M8 span_metrics connector entirely. The connectors:
+// block disappears from the rendered output, traces no longer tee
+// through span_metrics, and the metrics pipeline no longer consumes
+// it on the receiver side.
+func TestExpand_OBI_ReplaceSpanMetricsConnector(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on, ReplaceSpanMetricsConnector: true}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{
+		"\nconnectors:",
+		"span_metrics:",
+		"aggregation_cardinality_limit:",
+	})
+	if got := pipelineExporters(t, out, "traces"); contains(got, "span_metrics") {
+		t.Errorf("traces pipeline must NOT tee through span_metrics when OBI replaces it; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); contains(got, "span_metrics") {
+		t.Errorf("metrics pipeline must NOT consume span_metrics when OBI replaces it; got %v", got)
+	}
+	if got := pipelineReceivers(t, out, "metrics"); !contains(got, "obi") {
+		t.Errorf("metrics pipeline must still include obi receiver; got %v", got)
+	}
+}
+
 // --- test helpers ---
 
 // pipelineSection returns the body of a single pipeline (everything from the

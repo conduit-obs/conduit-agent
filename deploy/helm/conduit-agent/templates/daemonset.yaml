@@ -48,11 +48,13 @@ spec:
       {{- end }}
       hostNetwork: {{ .Values.daemonset.hostNetwork }}
       dnsPolicy: {{ .Values.daemonset.dnsPolicy }}
-      {{- if .Values.daemonset.hostMounts.enabled }}
+      {{- if or .Values.daemonset.hostMounts.enabled .Values.obi.enabled }}
       # hostPID lets the processes scraper see every PID on the node
       # rather than just the conduit pod's PID namespace. Required when
       # hostmetrics is enabled and the processes scraper is on (it is in
-      # the M5.B fragment); harmless when receivers are OTLP-only.
+      # the M5.B fragment); also required by OBI which attaches eBPF
+      # probes to processes by PID across the host. Harmless when
+      # receivers are OTLP-only.
       hostPID: true
       {{- end }}
       {{- with .Values.daemonset.nodeSelector }}
@@ -150,7 +152,16 @@ spec:
           resources:
             {{- toYaml .Values.daemonset.resources | nindent 12 }}
           securityContext:
+            {{- if .Values.obi.enabled }}
+            # OBI (ADR-0020) needs to attach eBPF probes to processes
+            # across the host, which requires allowing privilege
+            # escalation so the kernel grants the ambient capability
+            # set on exec. Without this the BPF system calls fail
+            # with EPERM even when the caps are listed below.
+            allowPrivilegeEscalation: true
+            {{- else }}
             allowPrivilegeEscalation: false
+            {{- end }}
             readOnlyRootFilesystem: true
             {{- if .Values.daemonset.runAsRoot }}
             # The hostmetrics processes scraper reads /proc/<pid> for every
@@ -173,6 +184,22 @@ spec:
             capabilities:
               drop:
                 - ALL
+              {{- if .Values.obi.enabled }}
+              # OBI eBPF capability set — see ADR-0020 sub-decision 2
+              # and upstream's k8s example at
+              # https://opentelemetry.io/docs/zero-code/obi/configure/collector-receiver/.
+              # CHECKPOINT_RESTORE follows upstream's example for
+              # cross-kernel-version compatibility; the other six
+              # are the documented OBI-required set.
+              add:
+                - SYS_ADMIN
+                - DAC_READ_SEARCH
+                - NET_RAW
+                - SYS_PTRACE
+                - PERFMON
+                - BPF
+                - CHECKPOINT_RESTORE
+              {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/conduit

@@ -13,6 +13,7 @@ A familiar, batteries-included OTel Collector distribution and CLI that:
 1. Lets a platform engineer with no OpenTelemetry expertise turn telemetry on in 30 minutes.
 2. Sends safe-by-default data — cardinality-aware, redaction-aware, RED-metrics-before-sampling.
 3. Stays open: pure upstream OTel components, no proprietary exporter, no lock-in at the collection layer.
+4. Offers an opt-in path to zero-code application instrumentation on Linux via [OpenTelemetry eBPF Instrumentation](https://opentelemetry.io/docs/zero-code/obi/) — flip a single YAML flag (`obi.enabled: true`) and Conduit captures HTTP / gRPC / database RED metrics + traces for every service on the host without touching application code. See [`docs/getting-started/obi.md`](docs/getting-started/obi.md).
 
 ## What Conduit is not
 

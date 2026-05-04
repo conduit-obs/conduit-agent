@@ -15,6 +15,11 @@
 #   --service-name=NAME     service.name on emitted signals (defaults to hostname).
 #   --deployment-env=ENV    deployment.environment (default: production).
 #   --version=VER           Conduit version to install (default: latest GitHub release).
+#   --with-obi              Install the systemd drop-in that grants the eBPF
+#                           capabilities the OBI receiver needs (ADR-0020). Required
+#                           when conduit.yaml has obi.enabled: true on a Linux host.
+#                           Idempotent — re-running the installer regenerates the
+#                           drop-in instead of appending.
 #   --no-start              Install but do not enable/start the systemd unit.
 #   --help                  Print this help and exit.
 #
@@ -29,6 +34,7 @@ API_KEY=""
 SERVICE_NAME=""
 DEPLOYMENT_ENV="production"
 START=1
+WITH_OBI=0
 
 usage() {
     sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
@@ -57,6 +63,7 @@ while [ $# -gt 0 ]; do
         --deployment-env)    DEPLOYMENT_ENV="${2:-}"; shift ;;
         --version=*)         VERSION="${1#*=}" ;;
         --version)           VERSION="${2:-}"; shift ;;
+        --with-obi)          WITH_OBI=1 ;;
         --no-start)          START=0 ;;
         --help|-h)           usage; exit 0 ;;
         *) die "unknown flag: $1 (try --help)" ;;
@@ -172,6 +179,71 @@ CONDUIT_DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENV}
 EOF
     chown root:conduit /etc/conduit/conduit.env
     chmod 0640 /etc/conduit/conduit.env
+fi
+
+# ---- OBI systemd drop-in (--with-obi) --------------------------------------
+#
+# The OBI receiver (ADR-0020) instruments processes via eBPF, which
+# requires a non-default capability set. We grant the upstream-documented
+# caps (CAP_SYS_ADMIN, CAP_DAC_READ_SEARCH, CAP_NET_RAW, CAP_SYS_PTRACE,
+# CAP_PERFMON, CAP_BPF) via a drop-in so the operator's `--with-obi`
+# decision is auditable and reversible (`rm` the file + daemon-reload).
+#
+# Writing both CapabilityBoundingSet= and AmbientCapabilities= is the
+# defensive shape: the bounding set defines the upper limit a process can
+# ever drop into, and the ambient set propagates the caps across exec
+# boundaries. Without the bounding set the ambient set has no effect.
+#
+# Idempotent: rewrites the file every run. Operators reverting OBI
+# remove the file with `sudo rm /etc/systemd/system/conduit.service.d/obi.conf`
+# and reload.
+
+obi_kernel_supports_obi() {
+    [ -r /proc/sys/kernel/osrelease ] || return 1
+    local rel major minor
+    rel=$(cat /proc/sys/kernel/osrelease)
+    major=$(printf '%s' "$rel" | cut -d. -f1)
+    minor=$(printf '%s' "$rel" | cut -d. -f2 | grep -oE '^[0-9]+' || echo 0)
+    if [ "$major" -gt 5 ] || { [ "$major" -eq 5 ] && [ "$minor" -ge 8 ]; }; then
+        return 0
+    fi
+    if [ "$major" -ge 4 ] && [ -r /etc/os-release ] && grep -qiE 'id_like=.*rhel|^id="?(rhel|centos|rocky|almalinux|ol)' /etc/os-release; then
+        [ "$major" -gt 4 ] || [ "$minor" -ge 18 ]
+        return $?
+    fi
+    return 1
+}
+
+write_obi_dropin() {
+    local dir="/etc/systemd/system/conduit.service.d"
+    local file="${dir}/obi.conf"
+    mkdir -p "$dir"
+    cat > "$file" <<'EOF'
+# Written by install_linux.sh --with-obi.
+# Grants the eBPF capabilities the OBI receiver needs (ADR-0020).
+# Remove this file + run `sudo systemctl daemon-reload` to revert.
+[Service]
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_NET_RAW CAP_SYS_PTRACE CAP_PERFMON CAP_BPF
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_NET_RAW CAP_SYS_PTRACE CAP_PERFMON CAP_BPF
+EOF
+    chmod 0644 "$file"
+}
+
+if [ "$WITH_OBI" -eq 1 ]; then
+    if ! obi_kernel_supports_obi; then
+        cat >&2 <<EOF
+==> --with-obi requested, but the running kernel does not look like it
+    supports OBI (need ≥ 5.8 mainline, or ≥ 4.18 RHEL-family with backports).
+    Skipping the drop-in. If you believe the kernel is supported, install
+    manually: see docs/getting-started/obi.md.
+EOF
+    elif ! command -v systemctl >/dev/null 2>&1; then
+        echo "==> --with-obi requested but systemctl is not on PATH; skipping drop-in." >&2
+    else
+        write_obi_dropin
+        systemctl daemon-reload
+        echo "==> wrote /etc/systemd/system/conduit.service.d/obi.conf granting OBI eBPF caps."
+    fi
 fi
 
 # ---- enable + start (only if env is actually complete) ---------------------

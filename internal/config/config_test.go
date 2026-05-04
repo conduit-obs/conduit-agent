@@ -831,3 +831,143 @@ func TestValidationError_Format(t *testing.T) {
 		t.Errorf("Error() paths should be sorted alphabetically; got: %q", got)
 	}
 }
+
+// OBI defaults to on for the k8s profile and off everywhere else
+// (ADR-0020 sub-decision 4). After applyDefaults the struct is
+// always materialized with a concrete bool so the expander never
+// has to branch on profile mode itself.
+func TestParse_OBIDefaultOnK8sProfile(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: k8s
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.OBI == nil {
+		t.Fatal("OBI: nil after applyDefaults; want materialized struct")
+	}
+	if cfg.OBI.Enabled == nil {
+		t.Fatal("OBI.Enabled: nil after applyDefaults; want concrete bool")
+	}
+	if !*cfg.OBI.Enabled {
+		t.Errorf("OBI.Enabled: got false on k8s profile; want true (default-on per ADR-0020)")
+	}
+}
+
+func TestParse_OBIDefaultOffOnLinuxProfile(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.OBI == nil || cfg.OBI.Enabled == nil {
+		t.Fatal("OBI struct/Enabled should be materialized by applyDefaults")
+	}
+	if *cfg.OBI.Enabled {
+		t.Errorf("OBI.Enabled: got true on linux profile; want false (default-off per ADR-0020)")
+	}
+}
+
+// Operators can flip OBI off explicitly on k8s and that wins over the
+// default-on. Distinguishing "field omitted" from "set to false" is
+// the whole reason Enabled is a *bool.
+func TestParse_OBIExplicitOffOnK8sOverridesDefault(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: k8s
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: false
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.OBI == nil || cfg.OBI.Enabled == nil {
+		t.Fatal("OBI/Enabled: nil")
+	}
+	if *cfg.OBI.Enabled {
+		t.Errorf("explicit obi.enabled: false should win over k8s default; got true")
+	}
+}
+
+// OBI is Linux-only by upstream design; the validator rejects
+// obi.enabled: true on darwin / windows / none with a remediation
+// message that names the offending profile mode.
+func TestParse_OBIEnabledOnNonLinuxProfileRejected(t *testing.T) {
+	tests := []string{"darwin", "windows", "none"}
+	for _, mode := range tests {
+		t.Run(mode, func(t *testing.T) {
+			yaml := `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: ` + mode + `
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: true
+`
+			_, err := Parse(strings.NewReader(yaml))
+			if err == nil {
+				t.Fatalf("Parse: want validation error for obi.enabled: true on profile.mode=%s", mode)
+			}
+			if !strings.Contains(err.Error(), "obi.enabled") {
+				t.Errorf("error should reference obi.enabled; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "Linux-only") {
+				t.Errorf("error should explain OBI is Linux-only; got: %v", err)
+			}
+		})
+	}
+}
+
+// obi.replace_span_metrics_connector: true while obi.enabled: false is
+// a configuration the operator clearly didn't intend — the toggle
+// would have no effect. Surface eagerly rather than letting it drift.
+func TestParse_OBIReplaceConnectorRequiresEnabled(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: false
+  replace_span_metrics_connector: true
+`
+	_, err := Parse(strings.NewReader(yaml))
+	if err == nil {
+		t.Fatal("Parse: want validation error for replace_span_metrics_connector while OBI is disabled")
+	}
+	if !strings.Contains(err.Error(), "obi.replace_span_metrics_connector") {
+		t.Errorf("error should reference obi.replace_span_metrics_connector; got: %v", err)
+	}
+}

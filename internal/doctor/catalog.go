@@ -13,8 +13,10 @@ package doctor
 //     check builds on a parsed Config, so a broken config short-
 //     circuits the slower probes.
 //
-//  2. Receiver checks (CDT0201, CDT0202) — local probes that don't
-//     hit the network, so we run them before any outbound dial.
+//  2. Receiver checks (CDT0201, CDT0202, CDT0204) — local probes
+//     that don't hit the network, so we run them before any
+//     outbound dial. CDT0204 (receiver.obi) skips itself when OBI
+//     is disabled, so non-OBI installs see no extra noise.
 //
 //  3. Output checks (CDT0102 auth, CDT0103 tls warning, CDT0101
 //     reachability) — auth + tls inspect the parsed config; the
@@ -29,6 +31,7 @@ func DefaultChecks() []Definition {
 		{ID: cdt0001ID, Title: "config.syntax", Run: CheckConfigSyntax},
 		{ID: cdt0201ID, Title: "receiver.ports", Run: CheckReceiverPorts},
 		{ID: cdt0202ID, Title: "receiver.permissions", Run: CheckReceiverPermissions},
+		{ID: cdt0204ID, Title: "receiver.obi", Run: CheckOBIPreflight},
 		{ID: cdt0102ID, Title: "output.auth", Run: CheckOutputAuth},
 		{ID: cdt0103ID, Title: "output.tls_warning", Run: CheckOutputTLS},
 		{ID: cdt0101ID, Title: "output.endpoint_reachable", Run: CheckOutputEndpoint},

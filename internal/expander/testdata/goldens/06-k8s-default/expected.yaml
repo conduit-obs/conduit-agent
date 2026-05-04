@@ -159,6 +159,40 @@ receivers:
       - type: container
         add_metadata_from_filepath: true
 
+  # OBI (OpenTelemetry eBPF Instrumentation) — zero-code application
+  # instrumentation. Auto-discovers processes on the host / node and
+  # emits HTTP / gRPC / database RED metrics + distributed traces
+  # without any code changes in the instrumented services.
+  #
+  # Every signal OBI emits is scope-tagged instrumentation.scope =
+  # "obi" so operators can filter at query time when both OBI and
+  # the M8 span_metrics connector are running (the V0.1 default —
+  # set obi.replace_span_metrics_connector: true to suppress the
+  # connector entirely).
+  #
+  # The curated schema in conduit.yaml is intentionally minimal
+  # (enabled + replace_span_metrics_connector). Tune anything else
+  # — instrument targets, OBI feature flags, discovery poll
+  # interval, k8s metadata extraction details — through
+  # overrides.receivers.obi.<...>; the embedded collector
+  # deep-merges overrides over the block emitted here. See
+  # docs/adr/adr-0020.md.
+  obi:
+    meter_provider:
+      # application: HTTP / gRPC / DB RED metrics + traces.
+      # Network features (per-connection metrics) are off by
+      # default because they're cardinality-explosive on busy
+      # hosts; operators who want them add `network` via
+      # overrides:.
+      features: [application]
+    # On the k8s profile, OBI auto-tags spans / metrics with the
+    # workload's namespace, pod name, deployment, and node — the
+    # same set k8sattributes layers on for OTLP traffic. Off on
+    # every other profile because k8s API access is not
+    # available there.
+    attributes:
+      kubernetes:
+        enable: true
 
 processors:
   memory_limiter:
@@ -436,6 +470,7 @@ service:
     traces:
       receivers:
         - otlp
+        - obi
       processors: [memory_limiter, resourcedetection, k8sattributes, resource, batch]
       exporters: [otlphttp/honeycomb, debug, span_metrics]
     metrics:
@@ -443,6 +478,7 @@ service:
         - otlp
         - hostmetrics
         - kubeletstats
+        - obi
         - span_metrics
       processors: [memory_limiter, resourcedetection, k8sattributes, resource, batch]
       exporters: [otlphttp/honeycomb, debug]

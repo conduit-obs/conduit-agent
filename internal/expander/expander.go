@@ -163,6 +163,22 @@ type templateView struct {
 	// TLS-required-by-default contract is visible at preview time
 	// (true means the operator opted into the lab override).
 	GatewayInsecure bool
+
+	// OBIEnabled (V0.1) toggles emission of the receivers.obi block
+	// and adds "obi" to the traces + metrics pipelines. The defaulting
+	// rule (k8s -> true, every other profile -> false) is encoded by
+	// applyDefaults in internal/config/load.go before the expander
+	// runs, so by the time newView reads cfg.OBI.Enabled it's the
+	// resolved bool — no profile branch in the template. See
+	// docs/adr/adr-0020.md for the integration shape.
+	OBIEnabled bool
+
+	// OBIK8sMetadata, when true, wires obi.attributes.kubernetes.enable: true
+	// in the rendered receivers.obi block so OBI auto-tags spans /
+	// metrics with k8s metadata. Defaulted to true alongside OBIEnabled
+	// on the k8s profile and false everywhere else; operators on other
+	// platforms who need k8s tagging would do so through overrides:.
+	OBIK8sMetadata bool
 }
 
 // Expand renders the BASE upstream OTel Collector YAML for cfg — the
@@ -314,6 +330,20 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 		v.LogReceivers = append(v.LogReceivers, ids.logs...)
 	}
 
+	// OBI receiver (ADR-0020). The applyDefaults pass in
+	// internal/config/load.go has already pre-filled cfg.OBI.Enabled
+	// per the resolved profile (k8s -> true, others -> false), so
+	// here we just read the bool. Adding "obi" to the traces +
+	// metrics pipelines mirrors the receiver-id pattern the profile
+	// fragments use; the receivers.obi block itself is emitted by
+	// the template under {{- if .OBIEnabled }}.
+	if cfg.OBI != nil && cfg.OBI.OBIEnabled(cfg.Profile) {
+		v.OBIEnabled = true
+		v.OBIK8sMetadata = cfg.Profile != nil && cfg.Profile.Mode == config.ProfileModeK8s
+		v.TraceReceivers = append(v.TraceReceivers, "obi")
+		v.MetricReceivers = append(v.MetricReceivers, "obi")
+	}
+
 	v.TraceProcessors = pipelineProcessorIDs(signalTraces, v.K8sAttributes)
 	v.MetricProcessors = pipelineProcessorIDs(signalMetrics, v.K8sAttributes)
 	v.LogProcessors = pipelineProcessorIDs(signalLogs, v.K8sAttributes)
@@ -353,7 +383,18 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 // get the RED-on default; the only knob a nil RED block is missing is
 // the cardinality limit, which we substitute with the documented
 // default.
+//
+// ADR-0020 sub-decision 3: when OBI is on AND
+// obi.replace_span_metrics_connector is true, the connector is
+// suppressed entirely so OBI is the sole RED source. In that case
+// applyREDView short-circuits before populating any RED fields,
+// which leaves REDEnabled=false and the template skips both the
+// connectors: block and the span_metrics tee on the traces pipeline.
 func applyREDView(v *templateView, cfg *config.AgentConfig) {
+	if v.OBIEnabled && cfg.OBI != nil && cfg.OBI.ReplaceSpanMetricsConnector {
+		v.REDEnabled = false
+		return
+	}
 	var red *config.REDConfig
 	if cfg.Metrics != nil {
 		red = cfg.Metrics.RED
