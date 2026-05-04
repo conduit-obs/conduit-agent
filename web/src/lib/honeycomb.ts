@@ -131,7 +131,7 @@ export function newHoneycombClient(opts: {
       const resolvedBoard = {
         name: board.name,
         description: board.description,
-        tags: board.tags,
+        tags: toWireTags(board.tags),
         column_layout: "multi",
         panels: board.panels.flatMap<Record<string, unknown>>((p) => {
           if (p.type === "text") {
@@ -252,7 +252,7 @@ function boardManifestPlaceholder(board: Board): unknown {
   return {
     name: board.name,
     description: board.description,
-    tags: board.tags,
+    tags: toWireTags(board.tags),
     column_layout: "multi",
     panels: board.panels.map((p) => {
       if (p.type === "text") {
@@ -274,6 +274,26 @@ function boardManifestPlaceholder(board: Board): unknown {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// toWireTags translates the human-editable "key:value" tag strings stored
+// in dashboards/*.json (per dashboards/README.md's "tags": ["k:v", ...]
+// convention) into the Tag object form Honeycomb's Board API requires:
+//   [{ key: "agent", value: "conduit" }, ...]
+// Honeycomb's schema is strict — keys are lowercase letters only (max 32)
+// and values are alphanumeric + "/" / "-" (max 128). The bundled JSONs
+// already conform; we just need the type-shape change here. Tags without
+// a ":" are dropped silently rather than mangled — the checked-in boards
+// don't produce any, and a missing tag is far better than a 422.
+function toWireTags(
+  tags: string[] | undefined,
+): { key: string; value: string }[] {
+  if (!tags) return [];
+  return tags.flatMap((t) => {
+    const i = t.indexOf(":");
+    if (i <= 0 || i === t.length - 1) return [];
+    return [{ key: t.slice(0, i), value: t.slice(i + 1) }];
+  });
 }
 
 // summarizeApiError pulls the most-useful sentence out of a Honeycomb
