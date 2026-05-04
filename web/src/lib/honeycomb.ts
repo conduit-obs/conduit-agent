@@ -3,11 +3,17 @@
 // Configuration API key (NOT the ingest key — different permission set;
 // see https://docs.honeycomb.io/get-started/configure/api-keys/).
 //
-// Two-call dance per board (the same shape conduit board apply will
+// Three-call dance per board (the same shape conduit board apply will
 // implement on the agent side once M11 lands):
 //
-//   1. POST /1/queries/{dataset}  — for each query panel; collect ids.
-//   2. POST /1/boards             — with the resolved query_ids.
+//   1. POST /1/queries/{dataset}            — for each query panel; collect query_ids.
+//   2. POST /1/query_annotations/{dataset}  — name + description for each query.
+//   3. POST /1/boards                       — flexible board referencing both ids.
+//
+// Honeycomb's Board v3 schema (see api-docs.honeycomb.io) makes
+// query_annotation_id required on every QueryPanel, so step 2 is not
+// optional even though our bundled JSONs predate that schema and store
+// the panel's name/description inline.
 //
 // CORS handling: Honeycomb's Configuration API does not advertise CORS
 // for arbitrary origins. Browser fetches typically fail with a network
@@ -53,67 +59,84 @@ export function newHoneycombClient(opts: {
     "Content-Type": "application/json",
   };
 
+  // hcFetch wraps every Honeycomb API call so the CORS-vs-HTTP-error
+  // distinction is handled in one place. Throws on network failure (CORS
+  // is the dominant cause from a browser); returns the Response on any
+  // HTTP status so callers can branch on status (skip vs hard fail).
+  const hcFetch = async (path: string, body: unknown): Promise<Response> => {
+    try {
+      return await fetch(`${apiHost}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw {
+        message: `Browser couldn't reach ${apiHost}: ${(e as Error).message}. This is almost always CORS — Honeycomb's Configuration API doesn't allow browser-origin POSTs. Use the curl snippet below from a terminal.`,
+        cors: true,
+        curlScript: buildCurlScript(opts, board, apiHost),
+      } as ImportError;
+    }
+  };
+
+  // hardFailOnAuth is called from per-panel loops where individual
+  // 422s are recoverable (skip the panel) but auth failures are not.
+  const hardFailOnAuth = (
+    res: Response,
+    text: string,
+    where: string,
+  ): void => {
+    if (res.status === 401 || res.status === 403) {
+      throw {
+        message: `Honeycomb rejected the API key on ${where}: ${res.status} ${res.statusText} ${text}. Confirm the key has the "Manage Boards" permission and matches the team/env you sent data to.`,
+        cors: false,
+        curlScript: buildCurlScript(opts, board, apiHost),
+      } as ImportError;
+    }
+  };
+
+  // Bound to the closure for buildCurlScript / hardFail to reach.
+  let board: Board = null as unknown as Board;
+
   return {
-    async importBoard(board, onProgress) {
+    async importBoard(b, onProgress) {
+      board = b;
       const queryPanels = board.panels.filter(
         (p): p is BoardPanel & { type: "query" } => p.type === "query",
       );
-      const queryIds: { panel: BoardPanel & { type: "query" }; id: string }[] = [];
+
+      // Step 1: create the query for each panel; collect query_ids.
+      // Panel-level validation failures (missing column, etc.) are
+      // captured into `skipped` so we can still ship the board with
+      // whatever resolved.
+      type Resolved = {
+        panel: BoardPanel & { type: "query" };
+        queryId: string;
+        annotationId: string;
+      };
+      const resolved: Resolved[] = [];
+      const pendingAnnotation: { panel: BoardPanel & { type: "query" }; queryId: string }[] = [];
       const skipped: SkippedPanel[] = [];
 
       for (let i = 0; i < queryPanels.length; i++) {
         const panel = queryPanels[i];
         onProgress?.({ stage: "resolving", current: i + 1, total: queryPanels.length });
 
-        let res: Response;
-        try {
-          res = await fetch(`${apiHost}/1/queries/${encodeURIComponent(panel.dataset)}`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(toWireQuerySpec(panel.query_spec)),
-          });
-        } catch (e) {
-          // Network error before we got a response. In a browser this
-          // is overwhelmingly CORS or DNS / offline. We bubble up as
-          // CORS so the UI can show curl-fallback.
-          throw {
-            message: `Browser couldn't reach ${apiHost}: ${(e as Error).message}. This is almost always CORS — Honeycomb's Configuration API doesn't allow browser-origin POSTs. Use the curl snippet below from a terminal.`,
-            cors: true,
-            curlScript: buildCurlScript(opts, board, apiHost),
-          } as ImportError;
-        }
+        const res = await hcFetch(
+          `/1/queries/${encodeURIComponent(panel.dataset)}`,
+          toWireQuerySpec(panel.query_spec),
+        );
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          // Auth / permission failures fail the whole import — there's
-          // no point continuing if the key can't talk to the API at
-          // all. Anything else (overwhelmingly 422 validation: column
-          // missing, dataset missing, derived column unresolved) is
-          // treated as a per-panel skip: we capture the reason and
-          // build the board with whatever else resolved. That keeps a
-          // single board JSON workable across hosts where some metrics
-          // legitimately don't exist (no swap, no NIC bonding, etc.).
-          if (res.status === 401 || res.status === 403) {
-            throw {
-              message: `Honeycomb rejected the API key on POST /1/queries/${panel.dataset}: ${res.status} ${res.statusText} ${text}. Confirm the key has the "Manage Boards" permission and matches the team/env you sent data to.`,
-              cors: false,
-              curlScript: buildCurlScript(opts, board, apiHost),
-            } as ImportError;
-          }
-          skipped.push({
-            name: panel.name,
-            reason: summarizeApiError(res.status, text),
-          });
+          hardFailOnAuth(res, text, `POST /1/queries/${panel.dataset}`);
+          skipped.push({ name: panel.name, reason: summarizeApiError(res.status, text) });
           continue;
         }
-        const json = (await res.json()) as { id: string };
-        queryIds.push({ panel, id: json.id });
+        const { id } = (await res.json()) as { id: string };
+        pendingAnnotation.push({ panel, queryId: id });
       }
 
-      // If literally every query failed validation, the board would be
-      // empty — bail with a more useful error than "you got an empty
-      // board." Most likely cause: wrong dataset slugs, or the agent
-      // hasn't sent any data yet so no columns exist at all.
-      if (queryIds.length === 0 && skipped.length > 0) {
+      if (pendingAnnotation.length === 0 && skipped.length > 0) {
         throw {
           message: `All ${skipped.length} query panel(s) were rejected by Honeycomb. Most often this means the agent hasn't sent any data yet (no columns exist in the dataset), or the dataset slug in the board doesn't match what your agent is writing to. First reason: ${skipped[0].reason}`,
           cors: false,
@@ -121,59 +144,73 @@ export function newHoneycombClient(opts: {
         } as ImportError;
       }
 
+      // Step 2: create a query annotation per resolved query. Honeycomb's
+      // Board v3 schema requires query_annotation_id on every QueryPanel
+      // — we use the panel's own name + description from the bundled
+      // JSON so the saved annotation matches what the operator sees in
+      // the UI.
+      for (const pa of pendingAnnotation) {
+        const res = await hcFetch(
+          `/1/query_annotations/${encodeURIComponent(pa.panel.dataset)}`,
+          {
+            name: pa.panel.name,
+            description: pa.panel.description ?? "",
+            query_id: pa.queryId,
+          },
+        );
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          hardFailOnAuth(res, text, `POST /1/query_annotations/${pa.panel.dataset}`);
+          // Annotation failure → skip the panel; the query will be left
+          // orphaned in Honeycomb but boards aren't billed and orphan
+          // queries get garbage-collected. Better than failing the whole
+          // import on one bad annotation save.
+          skipped.push({
+            name: pa.panel.name,
+            reason: `annotation save: ${summarizeApiError(res.status, text)}`,
+          });
+          continue;
+        }
+        const { id } = (await res.json()) as { id: string };
+        resolved.push({ panel: pa.panel, queryId: pa.queryId, annotationId: id });
+      }
+
+      // Step 3: build + POST the board. layout_generation: "auto" lets
+      // Honeycomb arrange the panels — we drop the per-panel size hints
+      // from the bundled JSON because manual layout requires explicit
+      // x/y coordinates that we'd have to compute. Auto-layout is good
+      // enough for V0; the operator can drag panels around in the UI.
       onProgress?.({ stage: "creating-board" });
-      // Resolve the board: replace each query panel's query_spec with
-      // the matching query_id; keep markdown panels as-is. Panels that
-      // were skipped above (validation failure, missing column, etc.)
-      // are dropped from the rendered board entirely — Honeycomb has no
-      // "placeholder panel" concept, and an empty panel would be more
-      // confusing than a missing one.
       const resolvedBoard = {
         name: board.name,
         description: board.description,
+        type: "flexible" as const,
+        layout_generation: "auto" as const,
         tags: toWireTags(board.tags),
-        column_layout: "multi",
         panels: board.panels.flatMap<Record<string, unknown>>((p) => {
           if (p.type === "text") {
-            return [
-              {
-                type: "text_panel",
-                text_panel: { body: p.content },
-                ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
-              },
-            ];
+            return [{ type: "text", text_panel: { content: p.content } }];
           }
-          const match = queryIds.find((q) => q.panel === p);
+          const match = resolved.find((r) => r.panel === p);
           if (!match) return [];
           return [
             {
               type: "query",
-              query_id: match.id,
-              ...(p.name ? { query_annotation_id: match.id } : {}),
-              ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
+              query_panel: {
+                query_id: match.queryId,
+                query_annotation_id: match.annotationId,
+              },
             },
           ];
         }),
       };
 
-      let res: Response;
-      try {
-        res = await fetch(`${apiHost}/1/boards`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(resolvedBoard),
-        });
-      } catch (e) {
-        throw {
-          message: `Browser couldn't reach ${apiHost}: ${(e as Error).message}.`,
-          cors: true,
-          curlScript: buildCurlScript(opts, board, apiHost),
-        } as ImportError;
-      }
+      const res = await hcFetch(`/1/boards`, resolvedBoard);
       if (!res.ok) {
         const text = await res.text().catch(() => "");
+        hardFailOnAuth(res, text, `POST /1/boards`);
         throw {
-          message: `POST /1/boards failed: ${res.status} ${res.statusText} ${text}`,
+          message: `POST /1/boards failed: ${summarizeApiError(res.status, text)}`,
           cors: false,
           curlScript: buildCurlScript(opts, board, apiHost),
         } as ImportError;
@@ -199,74 +236,93 @@ function buildCurlScript(
   board: Board,
   apiHost: string,
 ): string {
-  const lines = [
+  const queryPanels = board.panels.filter((p) => p.type === "query") as Array<
+    BoardPanel & { type: "query" }
+  >;
+  const lines: string[] = [
     `# Import "${board.name}" into Honeycomb. Run from any terminal with`,
     `# curl + jq installed. Treat HONEYCOMB_CONFIG_API_KEY as a deploy`,
     `# credential — it can rewrite every board, trigger, and SLO on the team.`,
     "",
+    "set -euo pipefail",
     `export HONEYCOMB_CONFIG_API_KEY=${shellQuote(opts.configApiKey)}`,
     `export HONEYCOMB_API=${shellQuote(apiHost)}`,
     "",
     "tmp=$(mktemp -d) && trap 'rm -rf $tmp' EXIT",
+    "auth=(-H \"X-Honeycomb-Team: $HONEYCOMB_CONFIG_API_KEY\" -H 'Content-Type: application/json')",
     "",
-    "# 1. Resolve every query panel into a query_id.",
+    "# 1. POST /1/queries — one per query panel; collect query_ids.",
   ];
-  const queryPanels = board.panels.filter((p) => p.type === "query") as Array<
-    BoardPanel & { type: "query" }
-  >;
   queryPanels.forEach((p, i) => {
     lines.push(
       `cat > "$tmp/q${i}.json" <<'JSON'`,
       JSON.stringify(toWireQuerySpec(p.query_spec), null, 2),
       "JSON",
-      `qid${i}=$(curl -fsS -H "X-Honeycomb-Team: $HONEYCOMB_CONFIG_API_KEY" \\`,
-      `  -H 'Content-Type: application/json' \\`,
-      `  -d "@$tmp/q${i}.json" \\`,
+      `qid${i}=$(curl -fsS "\${auth[@]}" -d "@$tmp/q${i}.json" \\`,
       `  "$HONEYCOMB_API/1/queries/${encodeURIComponent(p.dataset)}" | jq -r .id)`,
-      `echo "  resolved ${p.name.replace(/"/g, '\\"')} -> $qid${i}"`,
+      `echo "  query  ${p.name.replace(/"/g, '\\"')} -> $qid${i}"`,
       "",
     );
   });
-  lines.push("# 2. Build the board referencing those query_ids.");
+  lines.push("# 2. POST /1/query_annotations — required by Board v3 schema.");
+  queryPanels.forEach((p, i) => {
+    const annotation = {
+      name: p.name,
+      description: p.description ?? "",
+      query_id: `__QID_${i}__`,
+    };
+    lines.push(
+      `cat > "$tmp/a${i}.json" <<JSON`,
+      JSON.stringify(annotation, null, 2).replace(`"__QID_${i}__"`, `"$qid${i}"`),
+      "JSON",
+      `aid${i}=$(curl -fsS "\${auth[@]}" -d "@$tmp/a${i}.json" \\`,
+      `  "$HONEYCOMB_API/1/query_annotations/${encodeURIComponent(p.dataset)}" | jq -r .id)`,
+      `echo "  annot  ${p.name.replace(/"/g, '\\"')} -> $aid${i}"`,
+      "",
+    );
+  });
+  lines.push("# 3. POST /1/boards referencing the query_ids + annotation_ids.");
   lines.push("cat > \"$tmp/board.json\" <<'JSON'");
   lines.push(JSON.stringify(boardManifestPlaceholder(board), null, 2));
   lines.push("JSON");
-  // Substitute placeholder query_ids
   queryPanels.forEach((_, i) => {
     lines.push(
-      `sed -i.bak "s/__QID_${i}__/$qid${i}/g" "$tmp/board.json" && rm -f "$tmp/board.json.bak"`,
+      `sed -i.bak "s/__QID_${i}__/$qid${i}/g; s/__AID_${i}__/$aid${i}/g" "$tmp/board.json"`,
     );
   });
   lines.push(
+    'rm -f "$tmp/board.json.bak"',
     "",
-    'curl -fsS -H "X-Honeycomb-Team: $HONEYCOMB_CONFIG_API_KEY" \\',
-    "  -H 'Content-Type: application/json' \\",
-    '  -d @"$tmp/board.json" \\',
+    'curl -fsS "${auth[@]}" -d @"$tmp/board.json" \\',
     '  "$HONEYCOMB_API/1/boards" | jq .',
   );
   return lines.join("\n");
 }
 
+// boardManifestPlaceholder mirrors the in-browser resolvedBoard shape
+// but with __QID_n__ / __AID_n__ placeholders that the curl script
+// substitutes via sed once each id is known. The shape is the v3
+// Honeycomb Board schema (type: flexible, layout_generation: auto,
+// nested query_panel / text_panel objects).
 function boardManifestPlaceholder(board: Board): unknown {
   let qIdx = 0;
   return {
     name: board.name,
     description: board.description,
+    type: "flexible",
+    layout_generation: "auto",
     tags: toWireTags(board.tags),
-    column_layout: "multi",
     panels: board.panels.map((p) => {
       if (p.type === "text") {
-        return {
-          type: "text_panel",
-          text_panel: { body: p.content },
-          ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
-        };
+        return { type: "text", text_panel: { content: p.content } };
       }
-      const placeholder = `__QID_${qIdx++}__`;
+      const i = qIdx++;
       return {
         type: "query",
-        query_id: placeholder,
-        ...(p.size ? { layout: { width: p.size.width, height: p.size.height } } : {}),
+        query_panel: {
+          query_id: `__QID_${i}__`,
+          query_annotation_id: `__AID_${i}__`,
+        },
       };
     }),
   };
