@@ -11,7 +11,7 @@ export function linuxBlocks(state: WizardState): CommandBlock[] {
   }
   if (state.deploymentEnvironment.trim()) {
     flags.push(
-      `--deployment-environment=${shellQuote(state.deploymentEnvironment.trim())}`,
+      `--deployment-env=${shellQuote(state.deploymentEnvironment.trim())}`,
     );
   }
   if (state.collect.has("obi_zero_code")) {
