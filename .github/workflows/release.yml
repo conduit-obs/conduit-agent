@@ -161,16 +161,58 @@ jobs:
           Get-Service conduit
           msiexec.exe /x .\conduit.msi /qn /l*v uninstall.log
 
+  publish:
+    # Promotes the goreleaser-produced draft to a published release once
+    # both binaries (goreleaser) and the Helm chart (helm) have shipped
+    # cleanly. Runbook §5 promises "everything is automated"; this is the
+    # last piece — without it, install_linux.sh's `releases/latest`
+    # resolver lags behind the tag and operators install stale debs from
+    # the previous release (the v0.0.3 incident, 2026-05-04).
+    #
+    # Stable tags (vX.Y.Z) become the new "Latest". SemVer pre-release
+    # tags (vX.Y.Z-rc.1, -beta, -alpha…) are un-drafted as prereleases
+    # without bumping latest, mirroring goreleaser's `prerelease: auto`.
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [goreleaser, helm]
+    permissions:
+      contents: write
+    steps:
+      - name: Classify tag (stable vs prerelease)
+        id: classify
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "kind=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=prerelease" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Promote draft → published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ steps.classify.outputs.kind }}" = "stable" ]; then
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+            echo "::notice::release ${GITHUB_REF_NAME} promoted to Latest"
+          else
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease
+            echo "::notice::release ${GITHUB_REF_NAME} promoted to Prerelease"
+          fi
+
   notify:
     name: Notify maintainers
     runs-on: ubuntu-latest
-    needs: [goreleaser, helm]
+    needs: [goreleaser, helm, publish]
     if: always()
     steps:
       - name: Summarize the release status
         run: |
-          if [ "${{ needs.goreleaser.result }}" != "success" ] || [ "${{ needs.helm.result }}" != "success" ]; then
-            echo "::warning::release ${GITHUB_REF_NAME} did not complete cleanly; see the failed job(s)"
+          gr="${{ needs.goreleaser.result }}"
+          hl="${{ needs.helm.result }}"
+          pb="${{ needs.publish.result }}"
+          if [ "$gr" != "success" ] || [ "$hl" != "success" ] || [ "$pb" != "success" ]; then
+            echo "::warning::release ${GITHUB_REF_NAME} did not complete cleanly (goreleaser=$gr helm=$hl publish=$pb); see the failed job(s). The release stays in Draft per runbook §5 until the failure is fixed and the workflow re-runs."
             exit 0
           fi
           echo "release ${GITHUB_REF_NAME} published — verify per docs/release/runbook.md §6"

@@ -131,11 +131,19 @@ The release workflow at `.github/workflows/release.yml` runs `goreleaser release
 
 Open `gh run watch` against the tag's workflow and stay until it finishes. **If a step fails, the release stays in "draft" state**; fix the failure (or revert the tag if the cause is in the source) and re-run only the failed step.
 
+### Auto-publish
+
+The `publish` job in `release.yml` runs after both `goreleaser` and `helm` succeed and promotes the draft to a published release via `gh release edit --draft=false`. Stable tags (`vX.Y.Z`) become the new "Latest" — meaning the `releases/latest/download/install_linux.sh` URL the install script and docs site rely on starts resolving to the new version. SemVer pre-release tags (`vX.Y.Z-rc.1`, `-beta`, `-alpha`) are un-drafted as Prereleases and do **not** bump "Latest".
+
+If you need to override the classification (e.g. mark a `vX.Y.Z` as a security pre-release that shouldn't bump latest), run `gh release edit vX.Y.Z --latest=false --prerelease` after the workflow finishes.
+
+History note: the auto-publish step was added 2026-05-04 after `v0.0.3` shipped binaries successfully but stayed in Draft, leaving `releases/latest` pointing at `v0.0.2` and silently breaking new installs (an old `${env:CONDUIT_SERVICE_NAME}` reference in `v0.0.2`'s shipped `conduit.yaml` blew up the resource processor).
+
 ---
 
 ## 6 — Post-release smoke
 
-Before marking the release public:
+The release is already public at this point (auto-publish, see §5). These smokes confirm what shipped works and let you `gh release delete` if something is broken before announcing:
 
 ```sh
 # 1. Pull the published image and run it.
