@@ -64,7 +64,7 @@ export function newHoneycombClient(opts: {
           res = await fetch(`${apiHost}/1/queries/${encodeURIComponent(panel.dataset)}`, {
             method: "POST",
             headers,
-            body: JSON.stringify(panel.query_spec),
+            body: JSON.stringify(toWireQuerySpec(panel.query_spec)),
           });
         } catch (e) {
           // Network error before we got a response. In a browser this
@@ -176,7 +176,7 @@ function buildCurlScript(
   queryPanels.forEach((p, i) => {
     lines.push(
       `cat > "$tmp/q${i}.json" <<'JSON'`,
-      JSON.stringify(p.query_spec, null, 2),
+      JSON.stringify(toWireQuerySpec(p.query_spec), null, 2),
       "JSON",
       `qid${i}=$(curl -fsS -H "X-Honeycomb-Team: $HONEYCOMB_CONFIG_API_KEY" \\`,
       `  -H 'Content-Type: application/json' \\`,
@@ -233,4 +233,48 @@ function boardManifestPlaceholder(board: Board): unknown {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// toWireQuerySpec normalizes a query_spec from the human-editable form
+// stored in dashboards/*.json into the shape Honeycomb's Configuration
+// API actually accepts. The boards live as the human form per
+// dashboards/README.md ("change the regex / mountpoint / time_range in
+// the query_spec and reapply by hand"), so the boundary translation
+// happens here, not in the JSON files.
+//
+// Currently only one normalization needed: time_range strings like
+// "24h" / "1h" / "7d" → integer seconds. Honeycomb's API rejects the
+// string form with 422 "incorrect type for field
+// InnerQuerySpec.QuerySpec.time_range".
+function toWireQuerySpec(spec: unknown): unknown {
+  if (!spec || typeof spec !== "object") return spec;
+  const out: Record<string, unknown> = { ...(spec as Record<string, unknown>) };
+  if (typeof out.time_range === "string") {
+    const seconds = parseDurationSeconds(out.time_range);
+    if (seconds != null) out.time_range = seconds;
+  }
+  return out;
+}
+
+// parseDurationSeconds accepts "10s", "5m", "1h", "24h", "7d", "2w" and
+// the bare integer seconds form. Returns null if it can't parse, in
+// which case toWireQuerySpec leaves the value alone and the caller sees
+// Honeycomb's original 422. Honeycomb caps time_range at 1209600s (14d)
+// — we don't enforce that client-side, just translate.
+function parseDurationSeconds(s: string): number | null {
+  const m = /^(\d+)\s*([smhdw])$/.exec(s.trim());
+  if (!m) {
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+  }
+  const n = Number(m[1]);
+  const unit = m[2];
+  const mul: Record<string, number> = {
+    s: 1,
+    m: 60,
+    h: 3600,
+    d: 86400,
+    w: 604800,
+  };
+  return n * mul[unit];
 }
