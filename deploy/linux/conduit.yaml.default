@@ -4,12 +4,26 @@
 # your config-management system; the systemd unit reads that file):
 #
 #   HONEYCOMB_API_KEY                Honeycomb ingest key (x-honeycomb-team).
-#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
-#                                    Typical values: a host role like
-#                                    "edge-gateway" or "checkout-api".
 #   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g. "production",
 #                                    "staging"). Defaults to "production"
 #                                    in the shipped /etc/conduit/conduit.env.
+#
+# service.name defaults to "linux-host" via the profile-shaped fallback
+# (ADR-0021): when service_name is omitted from this file AND profile.mode
+# resolves to linux, applyDefaults() supplies "linux-host" so checked-in
+# dashboards under dashboards/ can hardcode dataset: "linux-host" on log
+# panels. host.name carries the per-host slice within the dataset, set
+# automatically by the resourcedetection processor.
+#
+# To override the profile default, uncomment ONE of:
+#
+#   service_name: my-edge-gateway                  # literal value, simplest
+#   service_name: ${env:CONDUIT_SERVICE_NAME}      # env-var indirection
+#
+# The literal-value form is what scripts/install_linux.sh writes when invoked
+# with --service-name=NAME. Operators using config-management to drive the
+# value via env vars use the second form and seed CONDUIT_SERVICE_NAME in
+# /etc/conduit/conduit.env (or via systemd Environment= on a drop-in).
 #
 # The defaulted profile is "auto", which on Linux loads:
 #   - hostmetrics    (cpu, memory, load, disk, filesystem, network, paging,
@@ -24,7 +38,6 @@
 # Full schema reference:
 #   https://github.com/conduit-obs/conduit-agent (until docs land at M13).
 
-service_name: ${env:CONDUIT_SERVICE_NAME}
 deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
 
 output:

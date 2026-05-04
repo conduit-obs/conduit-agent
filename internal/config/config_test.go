@@ -154,13 +154,19 @@ func TestParse_ValidationErrors(t *testing.T) {
 		wantPaths []string
 	}{
 		{
-			name: "missing service_name",
+			// profile.mode=none disables the profile-default service.name
+			// fill-in (ADR-0021), so service_name is still required here.
+			// Profile-defaulted platforms are covered by the positive
+			// TestParse_ServiceNameProfileDefault_* tests below.
+			name: "missing service_name (mode=none)",
 			yaml: `
 deployment_environment: dev
 output:
   mode: honeycomb
   honeycomb:
     api_key: x
+profile:
+  mode: none
 `,
 			wantPaths: []string{"service_name"},
 		},
@@ -297,10 +303,14 @@ output:
 			wantPaths: []string{"output.honeycomb"},
 		},
 		{
-			name: "all required fields missing",
+			// profile.mode=none keeps service_name required even after
+			// applyDefaults (ADR-0021).
+			name: "all required fields missing (mode=none)",
 			yaml: `
 output:
   mode: honeycomb
+profile:
+  mode: none
 `,
 			wantPaths: []string{"service_name", "deployment_environment", "output.honeycomb"},
 		},
@@ -969,5 +979,84 @@ obi:
 	}
 	if !strings.Contains(err.Error(), "obi.replace_span_metrics_connector") {
 		t.Errorf("error should reference obi.replace_span_metrics_connector; got: %v", err)
+	}
+}
+
+// Profile-default service.name fill-in covers ADR-0021's primary defaulting
+// path: when the operator omits service_name, applyDefaults supplies a
+// platform-shaped default keyed off the resolved profile. Boards under
+// dashboards/ rely on these defaults to hardcode log-panel datasets.
+func TestParse_ServiceNameProfileDefault(t *testing.T) {
+	cases := []struct {
+		profile string
+		want    string
+	}{
+		{"linux", "linux-host"},
+		{"darwin", "macos-host"},
+		{"windows", "windows-host"},
+		{"docker", "docker-host"},
+		{"k8s", "k8s-cluster"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.profile, func(t *testing.T) {
+			yaml := `
+deployment_environment: prod
+profile:
+  mode: ` + tc.profile + `
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+			cfg, err := Parse(strings.NewReader(yaml))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if cfg.ServiceName != tc.want {
+				t.Errorf("ServiceName: got %q, want %q", cfg.ServiceName, tc.want)
+			}
+		})
+	}
+}
+
+// Explicit service_name in conduit.yaml always wins over the profile default.
+func TestParse_ServiceNameExplicitWinsOverProfileDefault(t *testing.T) {
+	const yaml = `
+service_name: my-edge-gateway
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.ServiceName != "my-edge-gateway" {
+		t.Errorf("ServiceName: got %q, want %q (explicit must win over profile default)", cfg.ServiceName, "my-edge-gateway")
+	}
+}
+
+// profile.mode=none disables the profile-default fill-in, so service_name
+// is still required.
+func TestParse_ServiceNameRequiredOnModeNone(t *testing.T) {
+	const yaml = `
+deployment_environment: prod
+profile:
+  mode: none
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	_, err := Parse(strings.NewReader(yaml))
+	if err == nil {
+		t.Fatal("Parse: want validation error for missing service_name on profile.mode=none")
+	}
+	if !strings.Contains(err.Error(), "service_name") {
+		t.Errorf("error should reference service_name; got: %v", err)
 	}
 }

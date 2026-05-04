@@ -11,12 +11,15 @@
 # service; install.ps1 writes a starter file with placeholders):
 #
 #   HONEYCOMB_API_KEY                Honeycomb ingest key (x-honeycomb-team).
-#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
-#                                    Typical values: a host role like
-#                                    "edge-gateway" or "checkout-api".
 #   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g. "production",
 #                                    "staging"). Defaults to "production"
 #                                    in the shipped conduit.env.
+#
+# service.name defaults to "windows-host" via the profile-shaped fallback
+# (ADR-0021). To override, uncomment ONE of:
+#
+#   service_name: my-edge-gateway                  # literal value
+#   service_name: ${env:CONDUIT_SERVICE_NAME}      # env-var indirection
 #
 # The default profile is "auto", which on Windows loads:
 #   - hostmetrics             (cpu, memory, load=Processor Queue Length,
@@ -32,7 +35,6 @@
 #   profile:
 #     mode: none
 
-service_name: ${env:CONDUIT_SERVICE_NAME}
 deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
 
 output:

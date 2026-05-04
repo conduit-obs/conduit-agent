@@ -224,10 +224,10 @@
     {
       "type": "query",
       "name": "Log Volume by Service + Severity",
-      "description": "COUNT of prod-infra events broken down by service.name + severity_text. Peer apps emit logs over OTLP; Conduit's transform/logs lifts level/severity from JSON bodies (M9.C) and defaults bare records to INFO so severity filters are usable across SDKs that emit different conventions. Watch for service.name=='unknown_service' rows — those are peer apps whose SDK didn't set service.name; they need a CONDUIT_SERVICE_NAME / OTEL_SERVICE_NAME tweak.",
+      "description": "COUNT of docker-host events broken down by service.name + severity_text. Peer apps emit logs over OTLP; Conduit's transform/logs lifts level/severity from JSON bodies (M9.C) and defaults bare records to INFO so severity filters are usable across SDKs that emit different conventions. Watch for service.name=='unknown_service' rows — those are peer apps whose SDK didn't set service.name; they need a CONDUIT_SERVICE_NAME / OTEL_SERVICE_NAME tweak.",
       "chart_type": "stacked",
       "size": { "width": 6, "height": 4 },
-      "dataset": "prod-infra",
+      "dataset": "docker-host",
       "query_spec": {
         "calculations": [
           { "op": "COUNT" }
@@ -239,11 +239,11 @@
     {
       "type": "query",
       "name": "Recent Errors by Service (last 1h)",
-      "description": "COUNT of prod-infra events with severity_text matching ERROR / FATAL / WARN, by service.name + normalized_message. The normalized_message column has UUIDs, IPs, key=value values, and 4+ digit numbers masked — so each row is a distinct error template, not a unique log line. Peers that emit JSON logs get richer breakdowns (M9.C lifts level/msg into the structured columns).",
+      "description": "COUNT of docker-host events with severity_text matching ERROR / FATAL / WARN, by service.name + normalized_message. The normalized_message column has UUIDs, IPs, key=value values, and 4+ digit numbers masked — so each row is a distinct error template, not a unique log line. Peers that emit JSON logs get richer breakdowns (M9.C lifts level/msg into the structured columns).",
       "chart_type": "default",
       "display_style": "table",
       "size": { "width": 6, "height": 4 },
-      "dataset": "prod-infra",
+      "dataset": "docker-host",
       "query_spec": {
         "calculations": [
           { "op": "COUNT" }
@@ -262,10 +262,10 @@
     {
       "type": "query",
       "name": "Top Noisy Peer Services (log volume, last 24h)",
-      "description": "COUNT of prod-infra events grouped by service.name, top 10. Identifies which peer apps are dominating the log pipeline — useful for capacity planning (heavy loggers cost more) and for spotting accidentally-debug-on apps in production.",
+      "description": "COUNT of docker-host events grouped by service.name, top 10. Identifies which peer apps are dominating the log pipeline — useful for capacity planning (heavy loggers cost more) and for spotting accidentally-debug-on apps in production.",
       "chart_type": "bar",
       "size": { "width": 12, "height": 4 },
-      "dataset": "prod-infra",
+      "dataset": "docker-host",
       "query_spec": {
         "calculations": [
           { "op": "COUNT" }

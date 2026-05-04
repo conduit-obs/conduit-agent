@@ -49,7 +49,14 @@ func (c *AgentConfig) Validate() error {
 	v := &validator{}
 
 	if strings.TrimSpace(c.ServiceName) == "" {
-		v.add("service_name", "required; non-empty string")
+		// applyDefaults() fills service_name from a profile-shaped default
+		// (linux-host, macos-host, windows-host, docker-host, k8s-cluster)
+		// for every platform Conduit ships fragments for. Reaching this
+		// branch means either profile.mode=none (no platform narrative to
+		// default to) or auto-resolution failed (Conduit is running on a
+		// platform without a shipped profile). See ADR-0021.
+		v.add("service_name",
+			"required when profile.mode=none or auto-resolution fails; otherwise applyDefaults supplies a profile-shaped default")
 	}
 	if strings.TrimSpace(c.DeploymentEnvironment) == "" {
 		v.add("deployment_environment", "required; non-empty string")

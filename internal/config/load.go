@@ -102,4 +102,18 @@ func (c *AgentConfig) applyDefaults() {
 		def := obiDefaultForProfile(c.Profile)
 		c.OBI.Enabled = &def
 	}
+
+	// Profile-shaped service.name defaults. When the operator left
+	// service_name empty AND the resolved profile maps to a known
+	// platform, fill in the platform default (linux -> linux-host,
+	// darwin -> macos-host, etc; see DefaultServiceNameForPlatform
+	// and ADR-0021). mode=none and unresolvable auto leave the field
+	// empty — the validator catches those as "service_name required"
+	// because there's no platform narrative to default to. Explicit
+	// service_name in conduit.yaml always wins over the default.
+	if c.ServiceName == "" {
+		if def := DefaultServiceNameForPlatform(c.Profile.ResolvedPlatform()); def != "" {
+			c.ServiceName = def
+		}
+	}
 }

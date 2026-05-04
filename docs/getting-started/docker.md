@@ -59,15 +59,21 @@ tree:
 git clone https://github.com/conduit-obs/conduit-agent
 cd conduit-agent
 HONEYCOMB_API_KEY=hcaik_xxx \
-CONDUIT_SERVICE_NAME=docker-host \
 CONDUIT_DEPLOYMENT_ENVIRONMENT=production \
   docker compose -f deploy/docker/compose-linux-host.yaml up -d
 ```
 
+`service.name` defaults to `docker-host` ([ADR-0021](../adr/adr-0021.md)),
+matching the [`docker-host-overview.json`](../../dashboards/docker-host-overview.json)
+board. Override by editing
+`deploy/docker/conduit.yaml.default` to add `service_name: my-stack` (or
+mount your own `conduit.yaml` over `/etc/conduit/conduit.yaml` in the
+container) before bringing the stack up.
+
 The compose file:
 
-- Reads `HONEYCOMB_API_KEY` / `CONDUIT_SERVICE_NAME` /
-  `CONDUIT_DEPLOYMENT_ENVIRONMENT` from your shell.
+- Reads `HONEYCOMB_API_KEY` / `CONDUIT_DEPLOYMENT_ENVIRONMENT`
+  from your shell.
 - Publishes OTLP `4317` and `4318` to `127.0.0.1` on the host
   (LAN-wide ingest is an opt-in — change the bind address on the
   `ports:` mappings to `0.0.0.0` if you want it).
@@ -91,7 +97,6 @@ docker run -d \
   --pid=host \
   --restart=unless-stopped \
   -e HONEYCOMB_API_KEY="$HONEYCOMB_API_KEY" \
-  -e CONDUIT_SERVICE_NAME=docker-host \
   -e CONDUIT_DEPLOYMENT_ENVIRONMENT=production \
   -p 127.0.0.1:4317:4317 \
   -p 127.0.0.1:4318:4318 \
@@ -130,8 +135,8 @@ no-op in the docker profile (no filelog fragments), and
 
 ## Step 4 — Confirm data in Honeycomb (1 min)
 
-In Honeycomb, open the `docker-host` dataset (or whatever
-`CONDUIT_SERVICE_NAME` you set):
+In Honeycomb, open the `docker-host` dataset (or your override —
+service.name defaults to `docker-host` per ADR-0021):
 
 | Where to look | What you'll see |
 |---|---|

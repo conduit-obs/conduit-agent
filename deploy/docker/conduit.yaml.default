@@ -7,12 +7,15 @@
 #
 #   HONEYCOMB_API_KEY                Honeycomb ingest key (header
 #                                    x-honeycomb-team).
-#   CONDUIT_SERVICE_NAME             service.name on every emitted signal.
-#                                    Typical values: a service or component
-#                                    name like "checkout-api".
 #   CONDUIT_DEPLOYMENT_ENVIRONMENT   deployment.environment (e.g.
 #                                    "production", "staging"). Defaults to
 #                                    "production" when unset.
+#
+# service.name defaults to "docker-host" via the profile-shaped fallback
+# (ADR-0021). To override, uncomment ONE of:
+#
+#   service_name: my-compose-stack                 # literal value
+#   service_name: ${env:CONDUIT_SERVICE_NAME}      # env-var indirection
 #
 # profile.mode=docker tells the expander to bind OTLP receivers to 0.0.0.0
 # (peer containers in the same compose / pod / network can reach them).
@@ -22,7 +25,6 @@
 # agent can switch profile.mode to "linux" and add the bind mounts at run
 # time (documented in deploy/docker/README.md).
 
-service_name: ${env:CONDUIT_SERVICE_NAME}
 deployment_environment: ${env:CONDUIT_DEPLOYMENT_ENVIRONMENT}
 
 output:

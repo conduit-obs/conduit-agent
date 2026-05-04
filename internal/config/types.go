@@ -8,6 +8,8 @@
 // defaulted) to produce upstream OTel Collector YAML.
 package config
 
+import "runtime"
+
 // AgentConfig is the root of conduit.yaml. The fields here are stable surface
 // area; additions are additive (new optional field), removals are breaking
 // changes that must go through ADR review and SemVer (see ADR-0014).
@@ -159,6 +161,34 @@ func (p *Profile) SystemLogsEnabled() bool {
 	return *p.SystemLogs
 }
 
+// ResolvedPlatform returns the platform name this profile maps to, or "" if
+// the profile is "none" or auto-detect failed. The resolution is identical
+// to what the expander uses (see resolvePlatform in internal/expander); we
+// duplicate the logic here rather than import internal/profiles to keep the
+// dependency one-way (expander -> profiles, config has no profiles dep).
+//
+// "auto" resolves to runtime.GOOS only when GOOS matches a profile Conduit
+// ships fragments for (linux / darwin / windows). docker and k8s are never
+// auto-resolved — they require an explicit profile.mode because they aren't
+// GOOS values.
+func (p *Profile) ResolvedPlatform() string {
+	if p == nil {
+		return ""
+	}
+	switch p.Mode {
+	case ProfileModeNone:
+		return ""
+	case ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeWindows:
+		return string(p.Mode)
+	case ProfileModeAuto, "":
+		switch runtime.GOOS {
+		case "linux", "darwin", "windows":
+			return runtime.GOOS
+		}
+	}
+	return ""
+}
+
 // OBI toggles the OpenTelemetry eBPF Instrumentation receiver. The
 // schema is deliberately minimal — two fields covering the two most
 // consequential decisions (turn it on; suppress the M8 RED connector
@@ -214,6 +244,33 @@ func obiDefaultForProfile(p *Profile) bool {
 		return false
 	}
 	return p.Mode == ProfileModeK8s
+}
+
+// DefaultServiceNameForPlatform returns the profile-shaped service.name
+// default that applyDefaults() fills in when the operator omits service_name.
+// The platform names match Profile.ResolvedPlatform()'s output.
+//
+// Returns "" for unknown platforms / mode=none / unresolvable auto, which
+// keeps service_name a required field for those installs (see ADR-0021).
+//
+// The chosen names — linux-host, macos-host, windows-host, docker-host,
+// k8s-cluster — let the checked-in dashboards under dashboards/ hardcode
+// log-panel datasets without operators having to post-process board JSON
+// before applying. host.name carries the per-host slice within each dataset.
+func DefaultServiceNameForPlatform(platform string) string {
+	switch platform {
+	case "linux":
+		return "linux-host"
+	case "darwin":
+		return "macos-host"
+	case "windows":
+		return "windows-host"
+	case "docker":
+		return "docker-host"
+	case "k8s":
+		return "k8s-cluster"
+	}
+	return ""
 }
 
 // OutputMode is the discriminator for the Output block. Three modes

@@ -32,10 +32,17 @@ processors:
     send_batch_size: 8192
     timeout: 200ms
   resource:
+    # service.name uses action: insert so the agent's profile-shaped default
+    # (linux-host, macos-host, k8s-cluster, etc — see ADR-0021) labels signals
+    # Conduit emits or discovers itself (host metrics, host logs, journald)
+    # WITHOUT clobbering the service.name an upstream application sent on its
+    # OTLP traffic. deployment.environment keeps action: upsert because env
+    # tagging is a deployment concern that the operator deliberately wants to
+    # win over whatever the application emitted.
     attributes:
       - key: service.name
         value: "checkout"
-        action: upsert
+        action: insert
       - key: deployment.environment
         value: "prod"
         action: upsert

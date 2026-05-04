@@ -1599,6 +1599,70 @@ func equalSet(a, b []string) bool {
 	return true
 }
 
+// ADR-0021: the resource processor uses action: insert (not upsert) for
+// service.name so the agent's profile-shaped default labels host-emitted
+// signals without clobbering forwarded OTLP traffic from upstream apps.
+// deployment.environment keeps action: upsert because env tagging is the
+// operator's deliberate override.
+func TestExpand_ResourceProcessorServiceNameUsesInsert(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeLinux})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"- key: service.name",
+		"action: insert",
+		"- key: deployment.environment",
+		"action: upsert",
+	})
+	// Belt and braces: the literal pattern that mattered before this ADR.
+	if strings.Contains(out, "key: service.name\n        value: \"demo\"\n        action: upsert") {
+		t.Errorf("service.name still emits action: upsert; expected action: insert per ADR-0021")
+	}
+}
+
+// ADR-0021: profile-default service.name flows through the expander when
+// the operator omits service_name and applyDefaults fills it in. The
+// rendered template carries the platform-shaped default verbatim.
+func TestExpand_ProfileDefaultServiceNameFlowsThrough(t *testing.T) {
+	cases := []struct {
+		profile string
+		want    string
+	}{
+		{"linux", "linux-host"},
+		{"darwin", "macos-host"},
+		{"windows", "windows-host"},
+		{"docker", "docker-host"},
+		{"k8s", "k8s-cluster"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.profile, func(t *testing.T) {
+			yaml := `
+deployment_environment: dev
+profile:
+  mode: ` + tc.profile + `
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+			cfg, err := config.Parse(strings.NewReader(yaml))
+			if err != nil {
+				t.Fatalf("config.Parse: %v", err)
+			}
+			out, err := Expand(cfg)
+			if err != nil {
+				t.Fatalf("Expand: %v", err)
+			}
+			needle := "- key: service.name\n        value: \"" + tc.want + "\""
+			if !strings.Contains(out, needle) {
+				t.Errorf("expected rendered output to set service.name to %q for profile %q; full output:\n%s", tc.want, tc.profile, out)
+			}
+		})
+	}
+}
+
 func mustContain(t *testing.T, haystack string, needles []string) {
 	t.Helper()
 	for _, n := range needles {

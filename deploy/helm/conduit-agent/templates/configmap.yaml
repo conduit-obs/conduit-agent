@@ -11,7 +11,14 @@ data:
   # secretKeyRef so the chart-managed conduit.yaml never has the literal
   # key embedded.
   conduit.yaml: |
-    service_name: {{ required "conduit.serviceName is required" .Values.conduit.serviceName | quote }}
+    {{- if .Values.conduit.serviceName }}
+    service_name: {{ .Values.conduit.serviceName | quote }}
+    {{- else }}
+    # service_name omitted: conduit's applyDefaults() supplies the
+    # profile-shaped default ("k8s-cluster" for profile.mode=k8s) per
+    # ADR-0021. Operators override by setting conduit.serviceName in
+    # values.yaml.
+    {{- end }}
     deployment_environment: {{ .Values.conduit.deploymentEnvironment | default "production" | quote }}
 
     output:

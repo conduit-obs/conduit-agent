@@ -53,20 +53,26 @@ iwr -UseBasicParsing https://raw.githubusercontent.com/conduit-obs/conduit-agent
 # Or to run the script directly (it requires Administrator):
 .\install.ps1 `
   -ApiKey "$env:HONEYCOMB_API_KEY" `
-  -ServiceName "edge-gateway" `
   -DeploymentEnvironment "production"
 ```
+
+`service.name` defaults to `windows-host` ([ADR-0021](../adr/adr-0021.md)),
+which is what the checked-in
+[`windows-host-overview.json`](../../dashboards/windows-host-overview.json)
+board targets. Pass `-ServiceName edge-gateway` to override; the script
+writes `service_name: edge-gateway` directly into
+`%PROGRAMDATA%\Conduit\conduit.yaml`.
 
 The script:
 
 1. Downloads the latest release MSI from GitHub Releases (or you can
    pass `-MsiPath C:\path\to\conduit.msi` to use a local copy).
 2. Runs `msiexec /i conduit.msi /qn /l*v install.log`.
-3. Writes `HONEYCOMB_API_KEY`, `CONDUIT_SERVICE_NAME`, and
-   `CONDUIT_DEPLOYMENT_ENVIRONMENT` into
-   `HKLM:\SYSTEM\CurrentControlSet\Services\Conduit\Environment` so
-   the service inherits them on startup (this is the per-service
+3. Writes `HONEYCOMB_API_KEY` and `CONDUIT_DEPLOYMENT_ENVIRONMENT`
+   into `HKLM:\SYSTEM\CurrentControlSet\Services\Conduit\Environment`
+   so the service inherits them on startup (this is the per-service
    environment block; it never lands in the user's environment).
+   `service.name` lives in `conduit.yaml`, not the registry.
 4. `Restart-Service Conduit`.
 5. Polls `http://127.0.0.1:13133/` until the agent reports healthy.
 
@@ -85,11 +91,15 @@ msiexec /i conduit-X.Y.Z.msi /qn /l*v install.log
 $env_path = "HKLM:\SYSTEM\CurrentControlSet\Services\Conduit"
 $multi = @(
   "HONEYCOMB_API_KEY=$env:HONEYCOMB_API_KEY",
-  "CONDUIT_SERVICE_NAME=edge-gateway",
   "CONDUIT_DEPLOYMENT_ENVIRONMENT=production"
 )
 New-ItemProperty -Path $env_path -Name Environment -Value $multi `
   -PropertyType MultiString -Force | Out-Null
+
+# Optional: override the windows-host default for service.name by
+# editing the YAML directly. Otherwise the agent uses the profile
+# default (per ADR-0021).
+# Add-Content "$env:ProgramData\Conduit\conduit.yaml" "service_name: edge-gateway"
 
 Restart-Service Conduit
 ```
@@ -147,8 +157,9 @@ Windows Event Log (under "Conduit" source).
 
 ## Step 3 — Confirm data in Honeycomb (3 min)
 
-In Honeycomb, open the dataset matching `CONDUIT_SERVICE_NAME`
-(here: `edge-gateway`):
+In Honeycomb, open the dataset matching `service_name` in
+`conduit.yaml` (default: `windows-host`; whatever you set if you
+overrode):
 
 | Where to look | What you'll see |
 |---|---|

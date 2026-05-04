@@ -20,6 +20,22 @@ Future platform boards land alongside their respective platform milestones — `
 
 Every file in this directory must satisfy the contract in [`internal/profiles/PROFILE_SPEC.md`](../internal/profiles/PROFILE_SPEC.md): §1 fixes the *telemetry shape* (column names, severity defaults, resource attributes) so dashboards key off a stable vocabulary; §3 spells out the dashboard quality bar (narrative structure, platform-native primary key, viz shape matching the data, required pre-set filters and tags, first-five-minutes coverage) that PRs are reviewed against.
 
+## Dataset assumptions
+
+Every checked-in board's log panels target the **profile-shaped default `service.name`** the agent emits when the operator omits `service_name` ([ADR-0021](../docs/adr/adr-0021.md)). Honeycomb routes signals into datasets keyed off `service.name`, so the per-platform default cleanly maps onto a per-platform dataset:
+
+| Profile | Default `service.name` | Log-panel `dataset:` in this directory |
+|---|---|---|
+| `linux`   | `linux-host`   | `linux-host`   |
+| `darwin`  | `macos-host`   | `macos-host`   |
+| `windows` | `windows-host` | `windows-host` |
+| `docker`  | `docker-host`  | `docker-host`  |
+| `k8s`     | `k8s-cluster`  | `k8s-cluster`  |
+
+Metric panels target the dataset Honeycomb groups metrics into for your team (`metrics` in the JSON examples); operators on tenants whose metric routing is configured differently rewrite that field at apply time.
+
+If you override `service_name` in `conduit.yaml` (or pass `--service-name=foo` to `install_linux.sh`), edit each board's `dataset:` field for log panels to match what your install actually emits before applying. `conduit board apply` (M11) will offer a `--service-name=` rewrite flag so the same JSON works against any operator's chosen identity without hand-editing.
+
 ## File format (`format_version: 1`)
 
 ```jsonc

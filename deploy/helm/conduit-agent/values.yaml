@@ -86,9 +86,16 @@ gateway:
 # conduit.yaml (validated by internal/config/types.go).
 # ---------------------------------------------------------------------------
 conduit:
-  # Required. service.name resource attribute on every emitted signal.
-  # Typical k8s value: a label or workload-style identifier like
-  # "edge-cluster-prod" or "platform-shared".
+  # Optional. service.name resource attribute on signals Conduit emits or
+  # discovers itself (kubeletstats, hostmetrics, filelog/k8s). When empty,
+  # the agent uses the profile-shaped default "k8s-cluster" so checked-in
+  # dashboards (dashboards/k8s-cluster-overview.json) target a known
+  # dataset out of the box. Set this to override — e.g. to label a
+  # specific cluster's signals with "edge-cluster-prod" or "platform-shared".
+  #
+  # The resource processor uses action: insert for service.name (per
+  # ADR-0021), so OTLP traffic from peer pods retains the application's
+  # own service.name regardless of this value.
   serviceName: ""
 
   # Required. deployment.environment resource attribute. e.g. "production",

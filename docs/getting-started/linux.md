@@ -40,9 +40,14 @@ for your distro and architecture, installs it, seeds
 curl -fsSL https://raw.githubusercontent.com/conduit-obs/conduit-agent/main/scripts/install_linux.sh \
   | sudo bash -s -- \
     --api-key="$HONEYCOMB_API_KEY" \
-    --service-name=edge-gateway \
     --deployment-environment=production
 ```
+
+`service_name` defaults to `linux-host` (per [ADR-0021](../adr/adr-0021.md)),
+which is what the checked-in [`linux-host-overview.json`](../../dashboards/linux-host-overview.json)
+board targets — so the installer's no-flag default works with the shipped
+dashboard out of the box. Pass `--service-name=foo` to override; the script
+writes `service_name: foo` directly into `/etc/conduit/conduit.yaml`.
 
 That's it. The installer:
 
@@ -53,8 +58,7 @@ That's it. The installer:
    `systemd-journal` so filelog can read `/var/log/syslog` and the
    journald receiver can read journal entries).
 4. Writes `/etc/conduit/conduit.yaml` (the default config) and
-   `/etc/conduit/conduit.env` (your API key + service name + deployment
-   environment).
+   `/etc/conduit/conduit.env` (your API key + deployment environment).
 5. `systemctl enable --now conduit` so the service starts and survives
    reboots.
 
@@ -77,10 +81,11 @@ VERSION=v0.x.y
 curl -fsSLO "https://github.com/conduit-obs/conduit-agent/releases/download/${VERSION}/conduit_${VERSION#v}_linux_amd64.deb"
 sudo dpkg -i "conduit_${VERSION#v}_linux_amd64.deb"
 
-# Seed the env file:
+# Seed the env file (HONEYCOMB_API_KEY is the only required env var;
+# service_name defaults to "linux-host" via the profile-shaped fallback —
+# see ADR-0021. Override by editing /etc/conduit/conduit.yaml directly).
 sudo tee /etc/conduit/conduit.env > /dev/null <<EOF
 HONEYCOMB_API_KEY=$HONEYCOMB_API_KEY
-CONDUIT_SERVICE_NAME=edge-gateway
 CONDUIT_DEPLOYMENT_ENVIRONMENT=production
 EOF
 sudo chown root:conduit /etc/conduit/conduit.env
@@ -128,19 +133,22 @@ ships within ~60 seconds.
 ## Step 3 — Confirm data in Honeycomb (5 min)
 
 In Honeycomb, switch to the environment whose API key you used and
-look for a new dataset named after your `service_name` (here:
-`edge-gateway`). Within ~1 minute you should see:
+look for a new dataset named after your `service_name` (default:
+`linux-host`; whatever you passed to `--service-name=` if you overrode).
+Within ~1 minute you should see:
 
 | Where to look | What you'll see |
 |---|---|
-| **Datasets list** | A new entry: `edge-gateway` |
+| **Datasets list** | A new entry: `linux-host` (or your override) |
 | **Query** → group by `host.name` | One row per host running Conduit |
 | **Query** → metric: `system.cpu.utilization` | A time series of CPU usage |
 | **Query** → group by `host.name`, attribute `severity_text` | Log-level distribution |
 
-If your service name is generic ("default" / "unknown_service"), the
-agent didn't pick up `CONDUIT_SERVICE_NAME` from `/etc/conduit/conduit.env`.
-Re-check Step 1.
+If your service name is generic ("default" / "unknown_service"),
+something is wrong — the profile-default `linux-host` should always
+apply when `service_name:` is omitted from `conduit.yaml`. Run
+`sudo conduit doctor -c /etc/conduit/conduit.yaml` to surface the
+problem.
 
 ## Step 4 — Send traces from your app
 
@@ -247,8 +255,10 @@ sudo journalctl -u conduit | grep -E 'CDT[0-9]{4}'
 
 ### No data in Honeycomb after 5 minutes
 
-- Confirm the dataset name matches `CONDUIT_SERVICE_NAME` in the env
-  file. If it doesn't, the env file isn't being loaded — check
+- Confirm the dataset name matches `service_name` in
+  `/etc/conduit/conduit.yaml` (defaults to `linux-host` when
+  `service_name:` is omitted; see [ADR-0021](../adr/adr-0021.md)). If it
+  doesn't, the file isn't being loaded — check
   `sudo systemctl cat conduit | grep EnvironmentFile`.
 - Confirm `output.endpoint_reachable` passes (see above).
 - Check the agent's debug-exporter output for batches actually going

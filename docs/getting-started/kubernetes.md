@@ -45,10 +45,17 @@ helm install conduit \
   oci://ghcr.io/conduit-obs/charts/conduit-agent \
   --version 0.x.y \
   --namespace conduit --create-namespace \
-  --set conduit.serviceName=cluster-prod \
   --set conduit.deploymentEnvironment=production \
   --set honeycomb.apiKey="$HONEYCOMB_API_KEY"
 ```
+
+`service.name` defaults to `k8s-cluster` ([ADR-0021](../adr/adr-0021.md)),
+which is what the checked-in
+[`k8s-cluster-overview.json`](../../dashboards/k8s-cluster-overview.json)
+board targets — so the chart's no-flag default works with the shipped
+dashboard out of the box. Override per-cluster with
+`--set conduit.serviceName=cluster-prod` if you run multiple clusters
+into one Honeycomb tenant.
 
 Wait for the DaemonSet to roll out:
 

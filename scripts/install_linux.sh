@@ -12,7 +12,10 @@
 #
 # Flags:
 #   --api-key=KEY           Honeycomb ingest key (HONEYCOMB_API_KEY).
-#   --service-name=NAME     service.name on emitted signals (defaults to hostname).
+#   --service-name=NAME     service.name on emitted signals. When omitted, the
+#                           agent uses the profile-shaped default ("linux-host"
+#                           on the linux profile) so checked-in dashboards
+#                           target a known dataset out of the box. See ADR-0021.
 #   --deployment-env=ENV    deployment.environment (default: production).
 #   --version=VER           Conduit version to install (default: latest GitHub release).
 #   --with-obi              Install the systemd drop-in that grants the eBPF
@@ -134,16 +137,19 @@ $INSTALL_CMD "${TMP}/${ASSET}"
 
 # ---- collect required env --------------------------------------------------
 #
-# Conduit needs HONEYCOMB_API_KEY + CONDUIT_SERVICE_NAME before the
-# service can start. Three ways to supply them, in order of preference:
+# Conduit needs HONEYCOMB_API_KEY before the service can start. service.name
+# is supplied either by the operator (via --service-name or by editing
+# conduit.yaml after install) OR by the profile-shaped default that
+# applyDefaults() fills in at startup ("linux-host" on the linux profile;
+# see ADR-0021). Three ways to supply both pieces, in order of preference:
 #
 #   1. --api-key / --service-name flags        (CI-friendly, scripted installs)
 #   2. interactive prompts                     (sudo ./install_linux.sh on a TTY)
-#   3. operator hand-edits /etc/conduit/conduit.env after the fact
+#   3. operator hand-edits /etc/conduit/conduit.{env,yaml} after the fact
 #
-# Path 3 is what postinstall.sh already documents in the package's own
-# message; the install script's job is to make 1 + 2 ergonomic and to
-# refuse to enable+start a service that's guaranteed to crash-loop.
+# Path 3 is what postinstall.sh documents in the package's own message; the
+# install script's job is to make 1 + 2 ergonomic and to refuse to enable +
+# start a service guaranteed to crash-loop on a missing API key.
 
 if [ -t 0 ] && [ -t 1 ]; then
     if [ -z "$API_KEY" ]; then
@@ -158,27 +164,67 @@ if [ -t 0 ] && [ -t 1 ]; then
         fi
     fi
     if [ -z "$SERVICE_NAME" ]; then
-        DEFAULT_NAME="$(hostname -s 2>/dev/null || hostname || echo conduit)"
-        printf 'CONDUIT_SERVICE_NAME [%s]: ' "$DEFAULT_NAME"
+        # Default value matches the profile-shaped default applyDefaults
+        # would fill in if we wrote nothing here. Operators on multi-host
+        # fleets typically take the default and slice by host.name in
+        # boards; operators running multiple workloads per host override.
+        DEFAULT_NAME="linux-host"
+        printf 'service.name [%s]: ' "$DEFAULT_NAME"
         read -r SERVICE_NAME || true
         SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_NAME}"
     fi
 fi
 
-# ---- seed env file if we have anything to seed -----------------------------
+# ---- seed env file (HONEYCOMB_API_KEY only) --------------------------------
+#
+# Per ADR-0021, CONDUIT_SERVICE_NAME is no longer seeded by the installer —
+# service_name lives in conduit.yaml, written below.
 
-if [ -n "$API_KEY" ] || [ -n "$SERVICE_NAME" ]; then
-    if [ -z "$SERVICE_NAME" ]; then
-        SERVICE_NAME="$(hostname -s 2>/dev/null || hostname)"
-    fi
+if [ -n "$API_KEY" ]; then
     cat > /etc/conduit/conduit.env <<EOF
 # Written by install_linux.sh on $(date -u +%FT%TZ).
 HONEYCOMB_API_KEY=${API_KEY}
-CONDUIT_SERVICE_NAME=${SERVICE_NAME}
 CONDUIT_DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENV}
 EOF
     chown root:conduit /etc/conduit/conduit.env
     chmod 0640 /etc/conduit/conduit.env
+fi
+
+# ---- write service_name into conduit.yaml ---------------------------------
+#
+# When the operator supplied --service-name=foo (or accepted the interactive
+# prompt with a non-default value), we write `service_name: foo` directly
+# into /etc/conduit/conduit.yaml. Idempotent: replaces an existing
+# `^service_name:` line, otherwise appends one.
+#
+# When the operator left service_name empty, we touch nothing — the agent
+# fills in the profile-shaped default at startup. Operators who change
+# their mind later edit conduit.yaml by hand.
+
+write_service_name() {
+    local target="/etc/conduit/conduit.yaml"
+    local name="$1"
+    if [ ! -f "$target" ]; then
+        echo "==> ${target} not found; package install must precede this step." >&2
+        return 1
+    fi
+    if grep -q '^service_name:' "$target"; then
+        # Replace existing line in place. Use # as sed delimiter so service
+        # names containing / (unlikely but possible) don't break.
+        sed -i.bak "s#^service_name:.*#service_name: ${name}#" "$target"
+        rm -f "${target}.bak"
+    else
+        # Append a fresh block at the end of the file. The leading newline
+        # keeps the appended line visually separated from whatever the
+        # default file ended with.
+        printf '\n# Written by install_linux.sh --service-name on %s.\nservice_name: %s\n' \
+            "$(date -u +%FT%TZ)" "$name" >> "$target"
+    fi
+}
+
+if [ -n "$SERVICE_NAME" ]; then
+    write_service_name "$SERVICE_NAME"
+    echo "==> wrote service_name: ${SERVICE_NAME} to /etc/conduit/conduit.yaml"
 fi
 
 # ---- OBI systemd drop-in (--with-obi) --------------------------------------
@@ -254,9 +300,11 @@ fi
 # buried the real "you need to set these vars" message under a misleading
 # "==> conduit is running" line. Fail loud, exit clean.
 
+# env_is_complete checks that the only key the agent absolutely needs from
+# the environment file (HONEYCOMB_API_KEY) is non-empty. service.name is now
+# resolved from conduit.yaml + profile defaults, not the env file (ADR-0021).
 env_is_complete() {
-    grep -q '^HONEYCOMB_API_KEY=..*' /etc/conduit/conduit.env 2>/dev/null \
-        && grep -q '^CONDUIT_SERVICE_NAME=..*' /etc/conduit/conduit.env 2>/dev/null
+    grep -q '^HONEYCOMB_API_KEY=..*' /etc/conduit/conduit.env 2>/dev/null
 }
 
 if [ "$START" -eq 0 ]; then
@@ -269,20 +317,25 @@ elif env_is_complete; then
 else
     cat <<'EOF'
 
-==> Conduit installed but NOT started — required environment is unset.
+==> Conduit installed but NOT started — HONEYCOMB_API_KEY is unset.
 
    1. Edit /etc/conduit/conduit.env and set:
         HONEYCOMB_API_KEY                  (required)
-        CONDUIT_SERVICE_NAME               (required)
         CONDUIT_DEPLOYMENT_ENVIRONMENT     (defaults to "production")
 
-   2. Validate the config:
+   2. (Optional) Override the profile-shaped service.name by editing
+      /etc/conduit/conduit.yaml:
+        service_name: my-edge-gateway
+
+      Default is "linux-host" on the linux profile (ADR-0021).
+
+   3. Validate the config:
         sudo -u conduit conduit config --validate -c /etc/conduit/conduit.yaml
 
-   3. Enable and start the agent:
+   4. Enable and start the agent:
         sudo systemctl enable --now conduit
 
-   4. Watch the logs:
+   5. Watch the logs:
         sudo journalctl -u conduit -f
 
 EOF
