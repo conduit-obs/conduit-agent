@@ -175,33 +175,38 @@ export function newHoneycombClient(opts: {
         resolved.push({ panel: pa.panel, queryId: pa.queryId, annotationId: id });
       }
 
-      // Step 3: build + POST the board. layout_generation: "auto" lets
-      // Honeycomb arrange the panels — we drop the per-panel size hints
-      // from the bundled JSON because manual layout requires explicit
-      // x/y coordinates that we'd have to compute. Auto-layout is good
-      // enough for V0; the operator can drag panels around in the UI.
+      // Step 3: build + POST the board. We use layout_generation: "manual"
+      // and compute positions from the per-panel size hints in the
+      // bundled JSON. Honeycomb's grid is 12 columns; we walk panels
+      // left-to-right and wrap when the current panel would overflow.
+      // Without this, layout_generation: "auto" stacks side-by-side
+      // panels into tall narrow strips that don't reflect the dashboard
+      // designer's intent.
       onProgress?.({ stage: "creating-board" });
+      const surviving = board.panels.filter((p) =>
+        p.type === "text" ? true : resolved.some((r) => r.panel === p),
+      );
+      const positions = layoutPanels(surviving);
       const resolvedBoard = {
         name: board.name,
         description: board.description,
         type: "flexible" as const,
-        layout_generation: "auto" as const,
+        layout_generation: "manual" as const,
         tags: toWireTags(board.tags),
-        panels: board.panels.flatMap<Record<string, unknown>>((p) => {
+        panels: surviving.map((p, i) => {
+          const position = positions[i];
           if (p.type === "text") {
-            return [{ type: "text", text_panel: { content: p.content } }];
+            return { type: "text", text_panel: { content: p.content }, position };
           }
-          const match = resolved.find((r) => r.panel === p);
-          if (!match) return [];
-          return [
-            {
-              type: "query",
-              query_panel: {
-                query_id: match.queryId,
-                query_annotation_id: match.annotationId,
-              },
+          const match = resolved.find((r) => r.panel === p)!;
+          return {
+            type: "query",
+            query_panel: {
+              query_id: match.queryId,
+              query_annotation_id: match.annotationId,
             },
-          ];
+            position,
+          };
         }),
       };
 
@@ -302,27 +307,30 @@ function buildCurlScript(
 // boardManifestPlaceholder mirrors the in-browser resolvedBoard shape
 // but with __QID_n__ / __AID_n__ placeholders that the curl script
 // substitutes via sed once each id is known. The shape is the v3
-// Honeycomb Board schema (type: flexible, layout_generation: auto,
-// nested query_panel / text_panel objects).
+// Honeycomb Board schema (type: flexible, layout_generation: manual
+// with computed positions, nested query_panel / text_panel objects).
 function boardManifestPlaceholder(board: Board): unknown {
+  const positions = layoutPanels(board.panels);
   let qIdx = 0;
   return {
     name: board.name,
     description: board.description,
     type: "flexible",
-    layout_generation: "auto",
+    layout_generation: "manual",
     tags: toWireTags(board.tags),
-    panels: board.panels.map((p) => {
+    panels: board.panels.map((p, i) => {
+      const position = positions[i];
       if (p.type === "text") {
-        return { type: "text", text_panel: { content: p.content } };
+        return { type: "text", text_panel: { content: p.content }, position };
       }
-      const i = qIdx++;
+      const idx = qIdx++;
       return {
         type: "query",
         query_panel: {
-          query_id: `__QID_${i}__`,
-          query_annotation_id: `__AID_${i}__`,
+          query_id: `__QID_${idx}__`,
+          query_annotation_id: `__AID_${idx}__`,
         },
+        position,
       };
     }),
   };
@@ -330,6 +338,42 @@ function boardManifestPlaceholder(board: Board): unknown {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// layoutPanels assigns x/y/width/height positions to a list of panels,
+// driven by the per-panel `size` hint in the bundled JSON. Honeycomb's
+// flexible-board grid is 12 columns wide; we walk panels left-to-right
+// and wrap to the next row when the current panel would overflow,
+// tracking the tallest height in the row so the next row starts below.
+//
+// Defaults match the conventions in dashboards/*.json: half-width
+// (6 cols) by 4 rows tall for query panels, full-width (12 cols) by
+// 5 rows tall for text panels. Operators can drag-and-resize after
+// import; this is just the initial layout.
+function layoutPanels(
+  panels: BoardPanel[],
+): { x_coordinate: number; y_coordinate: number; width: number; height: number }[] {
+  const GRID_COLS = 12;
+  const positions: ReturnType<typeof layoutPanels> = [];
+  let x = 0;
+  let y = 0;
+  let rowMaxHeight = 0;
+  for (const p of panels) {
+    const defaultW = p.type === "text" ? 12 : 6;
+    const defaultH = p.type === "text" ? 5 : 4;
+    let width = p.size?.width ?? defaultW;
+    const height = p.size?.height ?? defaultH;
+    width = Math.min(width, GRID_COLS);
+    if (x + width > GRID_COLS) {
+      x = 0;
+      y += rowMaxHeight;
+      rowMaxHeight = 0;
+    }
+    positions.push({ x_coordinate: x, y_coordinate: y, width, height });
+    x += width;
+    rowMaxHeight = Math.max(rowMaxHeight, height);
+  }
+  return positions;
 }
 
 // toWireTags translates the human-editable "key:value" tag strings stored
