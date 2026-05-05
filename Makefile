@@ -102,6 +102,11 @@ build-ocb: $(OCB_BIN) $(BUILDER_CONFIG) ## Generate the embedded collector sourc
 		sed -e 's/^package main$$/package collector/' \
 			"$(OCB_OUTPUT_DIR)/$$f" > "$(COLLECTOR_DIR)/$$f"; \
 	done
+	@# OCB's generated import ordering doesn't match gofmt's grouping
+	@# rules, which trips golangci-lint's gofmt linter in CI. Run gofmt
+	@# here so the folded output matches the lint contract; no behavior
+	@# change, just a stable canonical layout.
+	@gofmt -w $(COLLECTOR_DIR)
 	@$(GO) mod tidy
 	@echo "OCB output folded into $(COLLECTOR_DIR). Run 'make build' to verify."
 

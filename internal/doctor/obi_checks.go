@@ -383,4 +383,3 @@ func readEffectiveCaps() (uint64, error) {
 	}
 	return 0, fmt.Errorf("no CapEff line in %s", procStatusPath)
 }
-
