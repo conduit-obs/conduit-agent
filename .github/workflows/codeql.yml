@@ -22,6 +22,18 @@ jobs:
         language: [go]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Vendor OBI
+        # CodeQL's autobuild step compiles the Linux Go source — which
+        # includes internal/collector/components_obi_linux.go and its
+        # import of go.opentelemetry.io/obi/collector. The upstream
+        # proxy v0.8.0 ships no eBPF Go bindings; we generate them
+        # here so the autobuild succeeds. See ADR-0020 sub-decision 1
+        # and "Open question: build pipeline".
+        run: make obi-vendor
       - uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}

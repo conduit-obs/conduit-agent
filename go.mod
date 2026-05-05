@@ -47,7 +47,7 @@ require (
 	go.opentelemetry.io/collector/receiver v1.57.0
 	go.opentelemetry.io/collector/receiver/otlpreceiver v0.151.0
 	go.opentelemetry.io/collector/service v0.151.0
-	go.opentelemetry.io/obi v0.0.0-00010101000000-000000000000
+	go.opentelemetry.io/obi v0.8.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -464,4 +464,26 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace go.opentelemetry.io/obi => ./third_party/obi
+// OBI integration. `go.opentelemetry.io/obi v0.8.0` lives in the
+// require block above for one reason: `go mod tidy` walks every
+// build tag (including //go:build linux files) and refuses to leave
+// it out as long as components_obi_linux.go imports the OBI
+// collector package. Carrying it in the require block means macOS /
+// Windows CI runners (where the //go:build !linux stub kicks in and
+// nothing actually compiles the OBI imports) can still resolve
+// modules cleanly — Go fetches the upstream module's go.mod from
+// the proxy, but no Go file on those platforms reaches an
+// OBI-bindings symbol so the missing eBPF bindings don't matter.
+//
+// On Linux, however, the upstream proxy version is unusable on its
+// own: as of v0.8.0 OBI doesn't ship pre-generated BPF Go bindings
+// (see ADR-0020 "Open question: build pipeline"), so a real Linux
+// build needs them generated locally. `make obi-vendor` solves this
+// by (a) cloning the OBI source into third_party/obi/, (b) running
+// upstream's `make docker-generate` to produce the bindings, and
+// (c) injecting `replace go.opentelemetry.io/obi => ./third_party/obi`
+// into this go.mod via `go mod edit`. `make obi-clean` reverses (c).
+// Linux CI runners run obi-vendor before any Go toolchain step
+// (.github/workflows/ci.yml); the third_party/obi/ tree is gitignored
+// so the replace directive only ever lives in working trees, never
+// in commits.

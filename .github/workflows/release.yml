@@ -49,6 +49,22 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Vendor OBI
+        # ADR-0020 sub-decision 1: every Linux conduit binary links
+        # OBI in. Goreleaser's Linux build paths reach
+        # internal/collector/components_obi_linux.go, which imports
+        # go.opentelemetry.io/obi/collector. Upstream proxy v0.8.0
+        # ships no eBPF Go bindings (ADR-0020 "Open question: build
+        # pipeline"), so we clone OBI source and run upstream's
+        # `make docker-generate` here, then inject the
+        # `replace go.opentelemetry.io/obi => ./third_party/obi`
+        # directive into go.mod via `go mod edit`. Goreleaser's
+        # subsequent build step picks up the replace and links the
+        # generated bindings into the Linux artifacts. macOS / Windows
+        # artifacts skip the OBI import via the //go:build tag and
+        # are unaffected.
+        run: make obi-vendor
+
       - name: Pre-flight (test + vulncheck on the exact tagged commit)
         # Don't trust that the latest `main` CI run still applies —
         # the tag could be ahead of or behind it. Re-run the same

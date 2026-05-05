@@ -9,6 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  # Reusable composite step: clone the OBI source, generate its eBPF Go
+  # bindings, and inject the `replace go.opentelemetry.io/obi =>
+  # ./third_party/obi` directive into go.mod. Required by every Linux
+  # job because internal/collector/components_obi_linux.go imports OBI
+  # unconditionally on Linux (ADR-0020 sub-decision 1) and the upstream
+  # proxy v0.8.0 doesn't ship the pre-generated BPF Go bindings (ADR-0020
+  # "Open question: build pipeline"). Skipped on macOS / Windows runners
+  # because the //go:build linux tag excludes the OBI import there.
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -18,6 +26,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        run: make obi-vendor
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
@@ -36,6 +46,15 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        if: runner.os == 'Linux'
+        # macOS / Windows runners skip OBI vendoring entirely. The
+        # //go:build linux tag on components_obi_linux.go excludes
+        # the import on those OSes; the upstream proxy v0.8.0
+        # (which lacks BPF bindings) is sufficient to satisfy
+        # `go mod download` since no Go file actually compiles
+        # against the OBI module on macOS / Windows.
+        run: make obi-vendor
       - name: go test
         run: go test ./...
 
@@ -48,6 +67,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        run: make obi-vendor
       - name: make build
         run: make build
       - name: Smoke (binary boots, subcommands surface the right errors)
@@ -71,6 +92,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        run: make obi-vendor
       - name: Verify expander goldens are up to date
         # The harness diffs every testdata/goldens/<case>/expected.yaml
         # against a fresh render. Failure means a renderer change
@@ -87,6 +110,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        run: make obi-vendor
       - name: Verify every CDT code has a docs section
         # Catches "added a check but forgot the troubleshooting doc"
         # before it ships. See docs/troubleshooting/cdt-codes.md.
@@ -101,6 +126,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      - name: Vendor OBI (Linux-only)
+        run: make obi-vendor
       - name: govulncheck
         # Per [07-testing-and-conformance-plan.md] §M12 release gates,
         # govulncheck is release-blocking on HIGH/CRITICAL findings.

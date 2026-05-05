@@ -30,24 +30,26 @@ The recipe runs four pieces in one kind cluster:
 
 ## One-time setup
 
-The OBI build pipeline is intentionally separate from the public release.
-Steps 1–2 only need to run once per OBI version bump.
-
 ```sh
 # From the conduit-agent repo root.
 
 # 1. Clone OBI at the pinned tag (see Makefile OBI_VERSION) and run upstream's
 #    `make docker-generate` inside it to produce the eBPF Go bindings. Needs
-#    Docker. ~2–4 min on first run; idempotent.
+#    Docker. ~2–4 min on first run; idempotent. Also injects
+#    `replace go.opentelemetry.io/obi => ./third_party/obi` into go.mod
+#    via `go mod edit` so subsequent Linux builds resolve OBI from the local
+#    checkout (the upstream proxy v0.8.0 lacks pre-generated BPF bindings).
 make obi-vendor
 
-# 2. Generate the OBI-variant components.go from builder-config.obi.yaml,
-#    add a replaces: directive to go.mod pointing at third_party/obi, and
-#    `go mod tidy`. DESTRUCTIVE — your local components.go + go.mod now
-#    target collector v0.149.0 + the local OBI checkout. Run `make obi-clean`
-#    when you're done to revert.
-make obi-build obi-image
+# 2. Cross-compile a Linux binary with OBI linked in (the //go:build linux
+#    file at internal/collector/components_obi_linux.go is what pulls OBI
+#    into the build) and bake it into the conduit:obi image.
+make obi-image
 ```
+
+When you're done, `make obi-clean` drops the replace directive from go.mod.
+The third_party/obi/ checkout and the conduit:obi image are left in place
+so the next iteration is fast; delete them manually to fully reset.
 
 ## Running the recipe
 
@@ -116,10 +118,10 @@ and `InstrumentationScope #0 obi`. If you don't see them: see Troubleshooting.
 # Cluster only — preserves the OBI checkout + image for next time.
 make kind-down
 
-# Full cleanup — also reverts go.mod + components.go to the base state.
+# Drop the OBI replace directive from go.mod when you're done with the
+# session (committed go.mod has require but no replace). third_party/obi/
+# and the conduit:obi image stay; delete them manually to reclaim disk.
 make obi-clean
-# (third_party/obi/ and the conduit:obi image are kept; delete manually if
-# you want to reclaim disk.)
 ```
 
 ## Troubleshooting
@@ -130,13 +132,20 @@ OBI's eBPF bindings are produced by a containerized clang+libbpf toolchain
 upstream ships in `third_party/obi/Dockerfile.generate`. Start Docker Desktop
 and re-run.
 
-### `obi-build-ocb` complains about a collector version mismatch
+### `make build` on Linux fails with "third_party/obi/ is missing"
 
-The variant manifest pins to `v0.149.0` to match OBI v0.8.0's `go.mod`. If
-upstream OBI bumps its collector pin, update `OBI_VERSION` in the Makefile
-and `v0.149.0` references in `builder-config.obi.yaml` together. The OBI
-upstream docs at <https://opentelemetry.io/docs/zero-code/obi/configure/collector-receiver/>
-have the canonical pin.
+ADR-0020 sub-decision 1 says every Linux conduit binary links OBI in.
+`make build` enforces this by requiring `third_party/obi/` to exist when
+`GOOS=linux`. Fix: `make obi-vendor` once. The CI workflow at
+`.github/workflows/ci.yml` runs that on Linux runners automatically.
+
+### Linux build fails with "undefined: BpfObjects" / "undefined: NetFlowId"
+
+OBI v0.8.0's published Go module doesn't ship the pre-generated eBPF Go
+bindings. Without `make obi-vendor` (which clones OBI source AND runs
+`make docker-generate` inside it), the upstream proxy version is unusable
+for an actual Linux build. macOS / Windows builds hide this because the
+`//go:build linux` tag on `components_obi_linux.go` excludes the import.
 
 ### Conduit pod crash-loops with `failed to attach probe: operation not permitted`
 

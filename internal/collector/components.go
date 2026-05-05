@@ -40,7 +40,6 @@ import (
 	tcplogreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcplogreceiver"
 	udplogreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/udplogreceiver"
 	windowseventlogreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver"
-	collector "go.opentelemetry.io/obi/collector"
 )
 
 type aliasProvider interface{ DeprecatedAlias() component.Type }
@@ -92,7 +91,6 @@ func components() (otelcol.Factories, error) {
 		tcplogreceiver.NewFactory(),
 		udplogreceiver.NewFactory(),
 		windowseventlogreceiver.NewFactory(),
-		collector.NewFactory(),
 	)
 	if err != nil {
 		return otelcol.Factories{}, err
@@ -110,8 +108,19 @@ func components() (otelcol.Factories, error) {
 		tcplogreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcplogreceiver v0.149.0",
 		udplogreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/udplogreceiver v0.149.0",
 		windowseventlogreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver v0.149.0",
-		collector.NewFactory().Type(): "go.opentelemetry.io/obi v0.8.0",
 	})
+
+	// addPlatformReceivers is a build-tag-gated hook that layers
+	// platform-specific receivers on top of the OCB-generated factory
+	// map above. Today the only such receiver is OBI's eBPF
+	// instrumentation receiver (Linux-only, ADR-0020 sub-decision 1):
+	// components_obi_linux.go provides the real implementation that
+	// imports go.opentelemetry.io/obi/collector and adds it to the
+	// map; components_obi_other.go provides a no-op so this call site
+	// stays tag-free. Modifies factories.Receivers and
+	// factories.ReceiverModules in place; safe because both maps are
+	// just-allocated above and not yet returned.
+	addPlatformReceivers(factories.Receivers, factories.ReceiverModules)
 
 	factories.Exporters, err = otelcol.MakeFactoryMap[exporter.Factory](
 		otlpexporter.NewFactory(),
