@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+#
+# Conduit container image — OBI variant (local-only).
+#
+# Structurally identical to deploy/docker/Dockerfile.goreleaser: the binary is
+# built on the host (by `make obi-image`'s host-side cross-compile step) and
+# COPY'd into a distroless:static runtime. We do NOT do the go build inside
+# the container because:
+#
+#   1. The Linux Go linker peaks at ~3 GB resident on this dependency set
+#      (notably aws-sdk-go-v2/service/ec2 pulled in by the resourcedetection
+#      processor's EC2 detector). Colima / Docker Desktop's default VM
+#      ceiling OOM-kills the linker before it finishes.
+#   2. `obi-build-ocb` already produces a working v0.149.0 + OBI go.mod on
+#      the host, so the host already has a hot module cache. Cross-compiling
+#      with CGO_ENABLED=0 GOOS=linux GOARCH=<arch> reuses that cache
+#      directly; running the build inside the container would re-fetch every
+#      module behind a separate cache mount.
+#   3. OBI's eBPF C code was pre-compiled into Go bindings during
+#      `make obi-vendor` (upstream's `make docker-generate`). Those bindings
+#      are pure Go from this point on, so a static cross-compile produces a
+#      runnable Linux binary without any C toolchain.
+#
+# Build context expectation: the Makefile target stages the binary +
+# default config into dist/conduit-obi-image/ and runs `docker build` with
+# that directory as context, so this Dockerfile sees just two files. If you
+# invoke docker build directly, mirror the staging or the COPY lines below
+# fail.
+#
+# Runtime privileges (eBPF capabilities, hostPID) come from the Helm chart's
+# obi.enabled=true SecurityContext at deploy time, not from this image.
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Default in-image conduit.yaml — overridden by the chart's ConfigMap mount
+# in the kind/k8s flow, kept here so `docker run conduit:obi` outside k8s
+# still has a sensible default.
+COPY --chown=65532:65532 conduit.yaml.default /etc/conduit/conduit.yaml
+
+# The Makefile target stages the host-built linux binary at the root of the
+# build context as ./conduit before invoking docker build.
+COPY --chown=65532:65532 conduit /usr/bin/conduit
+
+EXPOSE 4317 4318 13133
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/usr/bin/conduit"]
+CMD ["run", "--config", "/etc/conduit/conduit.yaml"]

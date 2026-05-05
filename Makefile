@@ -45,6 +45,7 @@ OCB_URL := https://github.com/open-telemetry/opentelemetry-collector-releases/re
 .PHONY: help build test vendor lint fmt install-ocb build-ocb release-snapshot clean \
         kind-up kind-image kind-load kind-deploy kind-test kind-down kind-smoketest \
         helm-lint helm-package helm-push helm-sign helm-publish \
+        obi-vendor obi-build-ocb obi-build obi-image obi-kind-load obi-kind-deploy obi-clean \
         update-goldens vulncheck
 
 help: ## Show available make targets
@@ -172,6 +173,135 @@ kind-down: ## Delete the kind cluster
 
 kind-smoketest: kind-up kind-image kind-load kind-deploy kind-test ## Full kind smoke sequence (excluding kind-down)
 	@echo "kind smoke complete. Run 'make kind-down' to tear down."
+
+# ----------------------------------------------------------------------------
+# OBI variant build (resolves ADR-0020's "Open question: build pipeline" for
+# the local-development case; the public release pipeline above does NOT link
+# OBI). Produces a parallel binary (./bin/conduit-obi) and image (conduit:obi)
+# with the OBI eBPF receiver compiled in. See tools/local-k8s/README.md for the
+# full meminator + kind recipe that consumes these artifacts.
+#
+# The destructive nature of obi-build-ocb is intentional and documented:
+#   1. obi-build-ocb regenerates internal/collector/components.go from
+#      builder-config.obi.yaml (pinned to collector v0.149.0 to match OBI's
+#      go.mod), then runs `go mod tidy` against the modified imports.
+#   2. obi-clean reverses the damage: regenerates components.go from the base
+#      builder-config.yaml (back to v0.151.0) and runs `go mod tidy` again.
+# Always run `make obi-clean` before committing, or your PR will carry the
+# v0.149.0 + OBI imports. CI will catch this but the local turnaround is faster.
+#
+# Typical local flow:
+#   make obi-vendor       # one-time: clone OBI, run make docker-generate
+#   make obi-build        # regenerates components.go, builds bin/conduit-obi
+#   make obi-image        # builds conduit:obi container image
+#   make kind-up obi-kind-load obi-kind-deploy
+#   <test, see traces>
+#   make kind-down obi-clean
+# ----------------------------------------------------------------------------
+OBI_VERSION ?= v0.8.0
+OBI_REPO ?= https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation.git
+OBI_DIR := third_party/obi
+OBI_BIN := $(BIN_DIR)/conduit-obi
+OBI_IMAGE ?= conduit:obi
+OBI_OCB_OUTPUT_DIR := $(BUILD_DIR)/collector-obi
+OBI_BUILDER_CONFIG := builder-config.obi.yaml
+# Helm release name is reused from the kind smoke variables above so
+# obi-kind-deploy lands the chart in the same conduit namespace as the
+# default smoke flow expects.
+OBI_KIND_RELEASE ?= $(KIND_RELEASE)
+
+obi-vendor: ## Clone go.opentelemetry.io/obi at the pinned tag into third_party/obi/ and run `make docker-generate` (one-time)
+	@if [ -d "$(OBI_DIR)/.git" ]; then \
+		echo "OBI checkout already at $(OBI_DIR); skipping clone. Delete and re-run to refresh."; \
+	else \
+		echo "Cloning OBI $(OBI_VERSION) into $(OBI_DIR)..."; \
+		mkdir -p third_party; \
+		git clone --depth 1 --branch $(OBI_VERSION) $(OBI_REPO) $(OBI_DIR); \
+	fi
+	@echo "Generating eBPF Go bindings in $(OBI_DIR) (this needs Docker; ~2 min first run)..."
+	@command -v docker >/dev/null 2>&1 || { echo "obi-vendor: docker not found on PATH; OBI's make docker-generate requires it"; exit 1; }
+	@$(MAKE) -C $(OBI_DIR) docker-generate
+	@echo "OBI vendored at $(OBI_DIR). Run 'make obi-build-ocb' next."
+
+obi-build-ocb: $(OCB_BIN) $(OBI_BUILDER_CONFIG) ## DESTRUCTIVE — regenerate internal/collector/components.go from builder-config.obi.yaml; downgrades collector pins to v0.149.0
+	@if [ ! -d "$(OBI_DIR)/pkg" ]; then \
+		echo "obi-build-ocb: $(OBI_DIR) is missing or empty; run 'make obi-vendor' first."; \
+		exit 1; \
+	fi
+	@echo "Generating OCB output (OBI variant) into $(OBI_OCB_OUTPUT_DIR)..."
+	@rm -rf $(OBI_OCB_OUTPUT_DIR)
+	@mkdir -p $(OBI_OCB_OUTPUT_DIR)
+	@$(OCB_BIN) --config=$(OBI_BUILDER_CONFIG) --skip-compilation
+	@echo "Folding OBI-variant OCB output into $(COLLECTOR_DIR)..."
+	@find $(COLLECTOR_DIR) -maxdepth 1 -name '*.go' ! -name 'collector.go' -delete
+	@for f in $(OCB_KEEP_FILES); do \
+		sed -e 's/^package main$$/package collector/' \
+			"$(OBI_OCB_OUTPUT_DIR)/$$f" > "$(COLLECTOR_DIR)/$$f"; \
+	done
+	@echo "Adding OBI replaces directive to go.mod (idempotent)..."
+	@$(GO) mod edit -replace=go.opentelemetry.io/obi=./$(OBI_DIR)
+	@$(GO) mod tidy
+	@echo "go.mod updated for OBI build. Run 'make obi-build' next, then 'make obi-clean' before committing."
+
+obi-build: obi-build-ocb ## Build ./bin/conduit-obi with the OBI receiver linked in (Linux only)
+	@mkdir -p $(BIN_DIR)
+	@echo "Building conduit-obi for $(GOOS)/$(GOARCH)..."
+	@if [ "$(GOOS)" != "linux" ]; then \
+		echo "obi-build: WARN — OBI's eBPF receiver is Linux-only; you're building for $(GOOS). Build inside a Linux VM / kind node, or use 'make obi-image' which produces a Linux container."; \
+	fi
+	@$(GO) build -o $(OBI_BIN) ./
+	@echo "Built $(OBI_BIN). Remember 'make obi-clean' before committing."
+
+OBI_IMAGE_STAGE := $(DIST_DIR)/conduit-obi-image
+# Default to the host architecture for the kind-target build. kind nodes on
+# macOS Apple Silicon run as arm64 (kindest/node images are multi-arch);
+# operators on Intel Macs naturally land on amd64. Override by setting
+# OBI_IMAGE_GOARCH=amd64 (or arm64) at the make command line.
+OBI_IMAGE_GOARCH ?= $(GOARCH)
+
+obi-image: obi-build-ocb ## Cross-compile the OBI binary for linux/$(OBI_IMAGE_GOARCH) on the host and bake it into conduit:obi
+	@if [ ! -d "$(OBI_DIR)/pkg" ]; then \
+		echo "obi-image: $(OBI_DIR) is missing or empty; run 'make obi-vendor' first."; \
+		exit 1; \
+	fi
+	@echo "Cross-compiling conduit-obi for linux/$(OBI_IMAGE_GOARCH) (host build, sidesteps Colima's linker memory ceiling)..."
+	@rm -rf $(OBI_IMAGE_STAGE)
+	@mkdir -p $(OBI_IMAGE_STAGE)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(OBI_IMAGE_GOARCH) \
+		$(GO) build -trimpath -ldflags="-s -w" -o $(OBI_IMAGE_STAGE)/conduit ./
+	@cp deploy/docker/conduit.yaml.default $(OBI_IMAGE_STAGE)/conduit.yaml.default
+	@cp deploy/docker/Dockerfile.obi $(OBI_IMAGE_STAGE)/Dockerfile
+	@echo "Building $(OBI_IMAGE) from $(OBI_IMAGE_STAGE) (~50 MB context, ~5 s)..."
+	docker build --platform linux/$(OBI_IMAGE_GOARCH) -t $(OBI_IMAGE) $(OBI_IMAGE_STAGE)
+	@echo "Built $(OBI_IMAGE). Run 'make obi-kind-load' to push it into the kind cluster."
+
+obi-kind-load: ## Load the conduit:obi image into the kind cluster (assumes 'make kind-up' already ran)
+	kind load docker-image $(OBI_IMAGE) --name $(KIND_CLUSTER)
+
+obi-kind-deploy: ## Helm-install (or upgrade) the chart into the kind cluster with obi.enabled=true
+	kubectl --context kind-$(KIND_CLUSTER) create namespace $(KIND_NAMESPACE) \
+		--dry-run=client -o yaml | kubectl --context kind-$(KIND_CLUSTER) apply -f -
+	helm --kube-context kind-$(KIND_CLUSTER) upgrade --install $(OBI_KIND_RELEASE) \
+		deploy/helm/conduit-agent \
+		--namespace $(KIND_NAMESPACE) \
+		-f tools/local-k8s/values-obi.yaml \
+		$(if $(HONEYCOMB_API_KEY),--set honeycomb.apiKey=$(HONEYCOMB_API_KEY),) \
+		--wait --timeout 180s
+
+obi-clean: $(OCB_BIN) $(BUILDER_CONFIG) ## Restore internal/collector/components.go from the base manifest and revert go.mod (run before committing)
+	@echo "Reverting OBI replace directive from go.mod..."
+	@$(GO) mod edit -dropreplace=go.opentelemetry.io/obi
+	@echo "Regenerating components.go from base builder-config.yaml (collector v0.151.0)..."
+	@rm -rf $(OCB_OUTPUT_DIR)
+	@mkdir -p $(OCB_OUTPUT_DIR)
+	@$(OCB_BIN) --config=$(BUILDER_CONFIG) --skip-compilation
+	@find $(COLLECTOR_DIR) -maxdepth 1 -name '*.go' ! -name 'collector.go' -delete
+	@for f in $(OCB_KEEP_FILES); do \
+		sed -e 's/^package main$$/package collector/' \
+			"$(OCB_OUTPUT_DIR)/$$f" > "$(COLLECTOR_DIR)/$$f"; \
+	done
+	@$(GO) mod tidy
+	@echo "Reverted to base build. 'git status' should show no changes under internal/collector/ or go.mod."
 
 # ----------------------------------------------------------------------------
 # Helm chart packaging + OCI publishing (M5.D). The chart lives at

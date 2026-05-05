@@ -179,6 +179,27 @@ type templateView struct {
 	// on the k8s profile and false everywhere else; operators on other
 	// platforms who need k8s tagging would do so through overrides:.
 	OBIK8sMetadata bool
+
+	// OBIJavaTLS, when true, emits `javaagent: { enabled: true }` under
+	// receivers.obi so OBI extracts its embedded Java agent JAR (per
+	// upstream pkg/internal/java/embedded/obi-java-agent.jar, baked in
+	// via go:embed) and dynamic-attaches it to JVMs found by the
+	// discovery loop. Required to capture HTTP method / path / headers
+	// and to inject the W3C traceparent through TLS-internal Java
+	// calls; without it OBI can only see encrypted bytes on the wire
+	// for those connections. Off by default (operator opts in via
+	// obi.java_tls: true). See ADR-0020 amendment (late-2026) for why
+	// this graduated from the overrides:-only path to a curated knob.
+	OBIJavaTLS bool
+
+	// OBINodeJS, when true, emits `nodejs: { enabled: true }` under
+	// receivers.obi so OBI's NodeJS injector loads its language-side
+	// hook into discovered Node processes. Without it the OBI generic
+	// tracer logs "trace-context propagation will not work for NodeJS
+	// services!" and emits decorrelated spans for each Node service
+	// hop. Off by default; operators with Node fleets opt in via
+	// obi.nodejs: true.
+	OBINodeJS bool
 }
 
 // Expand renders the BASE upstream OTel Collector YAML for cfg — the
@@ -340,6 +361,16 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 	if cfg.OBI != nil && cfg.OBI.OBIEnabled(cfg.Profile) {
 		v.OBIEnabled = true
 		v.OBIK8sMetadata = cfg.Profile != nil && cfg.Profile.Mode == config.ProfileModeK8s
+		// java_tls / nodejs are pointer-bools so applyDefaults can
+		// keep them off-by-default everywhere; here we just deref.
+		// validateOBI already rejected the (java_tls=true, enabled=false)
+		// shape, so reading these without re-checking enabled is safe.
+		if cfg.OBI.JavaTLS != nil && *cfg.OBI.JavaTLS {
+			v.OBIJavaTLS = true
+		}
+		if cfg.OBI.NodeJS != nil && *cfg.OBI.NodeJS {
+			v.OBINodeJS = true
+		}
 		v.TraceReceivers = append(v.TraceReceivers, "obi")
 		v.MetricReceivers = append(v.MetricReceivers, "obi")
 	}

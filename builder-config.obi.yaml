@@ -1,0 +1,100 @@
+# OpenTelemetry Collector Builder (OCB) manifest — OBI variant.
+#
+# This manifest exists alongside builder-config.yaml as a *local-only* build
+# path that links OBI (OpenTelemetry eBPF Instrumentation,
+# https://opentelemetry.io/docs/zero-code/obi/) into the Conduit binary. It is
+# the working answer to ADR-0020's "Open question: build pipeline" for the
+# local-development case; the public release pipeline continues to use
+# builder-config.yaml and ships a binary without OBI until upstream OBI
+# publishes pre-generated eBPF Go bindings (see ADR-0020 Context constraint 4).
+#
+# When you run `make obi-build-ocb`, OCB regenerates internal/collector/components.go
+# from this file (overwriting the base one). When you're done testing, run
+# `make obi-clean` to restore the base components.go and revert go.mod. See
+# tools/local-k8s/README.md for the full local recipe.
+#
+# Two pinning consequences flow from this manifest:
+#
+#   1. Collector pin: OBI v0.8.0's go.mod requires
+#      go.opentelemetry.io/collector/component v1.55.0 +
+#      go.opentelemetry.io/collector/exporter v1.55.0 etc., which corresponds to
+#      the v0.149.0 collector contrib release line. Every component below pins
+#      to v0.149.0 to match. The base manifest stays at v0.151.0; only this
+#      variant carries the older pin. ADR-0014 (monthly cadence) does not apply
+#      to local-only builds.
+#
+#   2. Local OBI checkout: the `replaces:` directive points at ./third_party/obi,
+#      which `make obi-vendor` populates by cloning
+#      github.com/open-telemetry/opentelemetry-ebpf-instrumentation@v0.8.0 and
+#      running `make docker-generate` inside it. Without that local checkout,
+#      this manifest cannot resolve.
+
+dist:
+  name: conduit
+  description: Conduit — OpenTelemetry Collector distribution (V0, OBI variant)
+  module: github.com/conduit-obs/conduit-agent-ocb-output
+  version: 0.0.0-dev-obi
+  output_path: ./build/collector-obi
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlpexporter v0.149.0
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.149.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.149.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.149.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.149.0
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/journaldreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/syslogreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcplogreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/udplogreceiver v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver v0.149.0
+  # OBI eBPF receiver — the whole point of this manifest. Per upstream OBI
+  # docs (https://opentelemetry.io/docs/zero-code/obi/configure/collector-receiver/)
+  # the receiver factory lives at go.opentelemetry.io/obi/collector and the
+  # gomod resolves via the replaces: block below since OBI does not publish
+  # the generated eBPF Go bindings in its module.
+  - gomod: go.opentelemetry.io/obi v0.8.0
+    import: go.opentelemetry.io/obi/collector
+
+connectors:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector v0.149.0
+
+extensions:
+  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/pprofextension v0.149.0
+
+# replaces: points OCB at the local OBI checkout populated by `make obi-vendor`.
+# The eBPF Go bindings live at third_party/obi/pkg/internal/ebpf/{generic,
+# common}/{c,bpf}/* and are produced by `make docker-generate` inside the
+# checkout. Without those bindings, the import of go.opentelemetry.io/obi/collector
+# fails to compile.
+#
+# Path is "../../third_party/obi" — NOT "./third_party/obi" — because OCB
+# writes this directive verbatim into ./build/collector-obi/go.mod and runs
+# `go mod tidy` inside that directory; relative paths there resolve from
+# build/collector-obi/, so we walk up two levels to reach the repo root.
+# Once we fold the generated components.go back into internal/collector/,
+# the Makefile target adds a separate `replace go.opentelemetry.io/obi =>
+# ./third_party/obi` to the *root* go.mod (relative from repo root) — those
+# two replace directives are in different files for different reasons.
+replaces:
+  - go.opentelemetry.io/obi => ../../third_party/obi

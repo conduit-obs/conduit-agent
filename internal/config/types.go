@@ -190,13 +190,17 @@ func (p *Profile) ResolvedPlatform() string {
 }
 
 // OBI toggles the OpenTelemetry eBPF Instrumentation receiver. The
-// schema is deliberately minimal — two fields covering the two most
+// schema is deliberately minimal — four fields covering the four most
 // consequential decisions (turn it on; suppress the M8 RED connector
-// when OBI replaces it). Anything more elaborate (instrumentation
-// targets, OBI features, k8s metadata enrichment, discovery poll
-// interval) goes through AgentConfig.Overrides as overrides.receivers.
-// obi.<...>, deep-merged at startup. See docs/adr/adr-0020.md for
-// why the curated surface stays this small in V0.1.
+// when OBI replaces it; opt into OBI's bytecode-injecting Java agent
+// for TLS-internal Java fleets; same for NodeJS). Anything more
+// elaborate (instrumentation targets, OBI features, k8s metadata
+// enrichment, discovery poll interval, distributed context propagation
+// modes) goes through AgentConfig.Overrides as overrides.receivers.
+// obi.<...>, deep-merged at startup. See docs/adr/adr-0020.md for why
+// the curated surface stays this small in V0.1, and the late-2026
+// amendment for the language-injector knobs added after meminator
+// validation showed they were the most-asked enterprise knobs.
 type OBI struct {
 	// Enabled toggles the OBI receiver. Pointer so applyDefaults can
 	// distinguish "field omitted" (apply profile default — k8s -> true,
@@ -214,6 +218,42 @@ type OBI struct {
 	// — the configuration would have no effect, surface that as an
 	// error rather than letting it silently drift.
 	ReplaceSpanMetricsConnector bool `yaml:"replace_span_metrics_connector,omitempty"`
+
+	// JavaTLS, when true, enables OBI's bytecode-injecting Java agent
+	// (embedded in the conduit binary via go:embed in upstream
+	// pkg/internal/java/embedded/obi-java-agent.jar; extracted to a
+	// host cache dir at startup, dynamic-attached to running JVMs via
+	// the HotSpot Attach API). Required to capture HTTP / gRPC headers
+	// AND propagate the W3C traceparent across TLS-internal Java calls
+	// — without it, OBI sees only encrypted bytes on the wire and
+	// cannot read or inject the trace-context header on the SSL/TLS
+	// path. Pointer-bool so applyDefaults can keep "off by default
+	// everywhere" while distinguishing "field omitted" from "explicitly
+	// false" for future profile-specific defaulting. Off by default for
+	// two reasons: (a) dynamic JVM attach has measurable overhead on
+	// JVMs with thousands of loaded classes, and (b) the dynamic-attach
+	// path consumes SYS_PTRACE on the target process, which the OBI
+	// preflight already requires but operators on non-OBI hosts should
+	// not be hit by accident. Validation rejects JavaTLS = true while
+	// Enabled = false (the toggle would have no effect; same shape as
+	// ReplaceSpanMetricsConnector). The on-switch flows through the
+	// expander into receivers.obi.javaagent.enabled in the rendered
+	// collector config; OBI's discovery loop handles the rest.
+	JavaTLS *bool `yaml:"java_tls,omitempty"`
+
+	// NodeJS, when true, enables OBI's NodeJS instrumentation injector
+	// (parallel shape to JavaTLS — extracts the embedded runtime
+	// support, attaches at process start). Required for distributed
+	// context propagation through Node services, which OBI's generic
+	// eBPF tracer cannot inject through libuv's vectored writes
+	// reliably without the language-side hook (see upstream
+	// pkg/internal/nodejs/nodejs.go: "trace-context propagation will
+	// not work for NodeJS services!" log line is the symptom when this
+	// is off). Pointer-bool, off by default, validation parallel to
+	// JavaTLS — rejects NodeJS = true while Enabled = false. Flows
+	// into receivers.obi.nodejs.enabled in the rendered collector
+	// config.
+	NodeJS *bool `yaml:"nodejs,omitempty"`
 }
 
 // OBIEnabled reports the effective on/off state of the OBI receiver

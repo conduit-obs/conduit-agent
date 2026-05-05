@@ -76,3 +76,18 @@ data:
       {{- if .Values.obi.replaceSpanMetricsConnector }}
       replace_span_metrics_connector: true
       {{- end }}
+      {{- if .Values.obi.javaTLS }}
+      java_tls: true
+      {{- end }}
+      {{- if .Values.obi.nodeJS }}
+      nodejs: true
+      {{- end }}
+
+    {{- with .Values.conduitOverrides }}
+    # Verbatim splice from values.conduitOverrides. ADR-0012 names
+    # overrides as the only escape hatch into upstream Collector knobs
+    # the chart hasn't surfaced as first-class fields; the agent
+    # deep-merges this section over the curated render at startup.
+    overrides:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}

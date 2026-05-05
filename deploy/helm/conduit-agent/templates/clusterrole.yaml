@@ -14,6 +14,23 @@ ClusterRole for the M5.B receivers and processor:
     processor walks via OwnerReferences). nodes is included so
     k8sattributes can extract node labels / annotations onto each
     signal.
+  - obi (when obi.enabled): runs three SharedInformer streams to
+    build its enrichment cache — pods, nodes, AND services. The pods
+    informer lets OBI map a captured PID to a workload; the services
+    informer lets it correlate connection ClusterIPs back to a
+    `k8s.service.name` so spans crossing the cluster network surface
+    look like service-to-service traffic instead of pod-to-pod IPs.
+    Without services in the rules below, OBI's k8s informer logs
+    `failed to list *v1.Service: services is forbidden` every cache
+    resync (~10m) and every span emitted with a peer ClusterIP loses
+    its k8s.service.name attribute. See
+    third_party/obi/pkg/kube/kubecache/meta/informers_init.go ->
+    initServiceIPInformer for the upstream call site, and ADR-0020
+    for why we accept the extra read scope. Operators who want
+    narrower RBAC can disable the informer instead via
+    overrides.receivers.obi.attributes.kubernetes.disable_informers:
+    [service] in conduit.yaml — at the cost of losing service-name
+    enrichment on OBI traces.
 
 The list is intentionally narrow — no write verbs anywhere, and no
 Secret access. Operators auditing the chart should be able to read
@@ -34,6 +51,7 @@ rules:
       - nodes/stats
       - nodes/proxy
       - pods
+      - services
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources:

@@ -29,8 +29,10 @@ DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
   enriched with Kubernetes workload metadata (`k8s.namespace.name`,
   `k8s.pod.name`, `k8s.deployment.name`, ...).
 - A `ServiceAccount` + read-only `ClusterRole` (pods, namespaces, nodes,
-  apps + batch workload kinds) bound by a `ClusterRoleBinding`. Disable
-  with `rbac.create=false` if your cluster manages RBAC out-of-band.
+  services, apps + batch workload kinds) bound by a `ClusterRoleBinding`.
+  Disable with `rbac.create=false` if your cluster manages RBAC out-of-band.
+  `services` is required by OBI's k8s informer when `obi.enabled=true`
+  (see ADR-0020); harmless when OBI is off.
 - Host bind mounts that the M5.B receivers need: `/hostfs` (read-only,
   `mountPropagation: HostToContainer`), `/var/log/pods`,
   `/var/log/containers`. Disable with `daemonset.hostMounts.enabled=false`
@@ -151,6 +153,11 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `otlp.headers` | `{}` | HTTP headers attached to every export. Typical use: vendor auth (`DD-API-KEY`, `Authorization`, …); reference secrets via `${env:NAME}` and inject the variables through `extraEnv`. |
 | `gateway.enabled` | `false` | Set true to route via a customer-operated OTLP/gRPC gateway. Wins over both `otlp.*` and `honeycomb.*` when set. |
 | `gateway.endpoint` | `""` | OTLP/gRPC URL of the gateway. Required when `gateway.enabled=true`. |
+| `obi.enabled` | `false` | Turn on the OBI eBPF receiver and grant the daemonset the eBPF capability set + `hostPID`. ADR-0020 explains the privilege footprint. |
+| `obi.replaceSpanMetricsConnector` | `false` | When true, OBI is the sole RED metric source and the M8 `span_metrics` connector is suppressed. |
+| `obi.javaTLS` | `false` | Enable OBI's bytecode-injecting Java agent. Required for header capture and W3C traceparent propagation through TLS-internal Java calls. ADR-0020 amendment. |
+| `obi.nodeJS` | `false` | Enable OBI's NodeJS instrumentation injector. Required for trace-context propagation through Node services (libuv vectored writes). ADR-0020 amendment. |
+| `conduitOverrides` | `{}` | Verbatim splice into the rendered `conduit.yaml`'s top-level `overrides:` block. ADR-0012 escape hatch — anything not exposed as a first-class chart value lands here, deep-merged at startup. Example: `{receivers: {obi: {ebpf: {context_propagation: all, track_request_headers: true}}}}`. |
 | `extraEnv` | `[]` | Extra env vars injected into the conduit container (verbatim under `containers[0].env`). Used to feed vendor auth tokens to `output.otlp.headers` or `overrides:`. |
 | `image.repository` | `ghcr.io/conduit-obs/conduit-agent` | OCI image (per ADR-0019). |
 | `image.tag` | `""` (falls back to `Chart.appVersion`) | Pin a specific agent build. |
@@ -158,7 +165,7 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `daemonset.tolerations` | `[{operator: Exists}]` | Wide-open by default so the agent runs on system / GPU nodes too. Tighten for high-security clusters. |
 | `daemonset.hostMounts.enabled` | `true` | Mount `/hostfs` (the host root, read-only, with `HostToContainer` propagation) plus `/var/log/pods` and `/var/log/containers` so hostmetrics + filelog/k8s see the node. Disable for an OTLP-only relay (also flip `conduit.profileMode` to `none`). |
 | `daemonset.runAsRoot` | `true` | Run the conduit container as UID 0. Required by the default profile because kubelet log directories are mode 0700 root-owned and `/proc/<pid>` for non-root pods isn't readable as a different unprivileged UID. Flip to `false` together with `profileMode=none`/`docker` to fall back to the image's baked-in nonroot UID 65532. |
-| `rbac.create` | `true` | Create the ClusterRole + ClusterRoleBinding the M5.B receivers and processor need (read-only access to pods / namespaces / nodes / apps + batch workload kinds). Disable when your cluster manages RBAC out-of-band; review `templates/clusterrole.yaml` to audit the exact rule set. |
+| `rbac.create` | `true` | Create the ClusterRole + ClusterRoleBinding the M5.B receivers and processor need (read-only access to pods / namespaces / nodes / services / apps + batch workload kinds). Disable when your cluster manages RBAC out-of-band; review `templates/clusterrole.yaml` to audit the exact rule set. |
 | `serviceAccount.create` | `true` | Set false to bind the DaemonSet to an external SA. |
 | `service.enabled` | `true` | Cluster-internal Service for OTLP ingress. |
 

@@ -1,0 +1,73 @@
+# Helm values overlay for the local OBI + meminator test recipe.
+#
+# Used by `make obi-kind-deploy` (which sets honeycomb.apiKey from
+# $HONEYCOMB_API_KEY at install time) and by the manual flow documented in
+# tools/local-k8s/README.md. This is *not* a production-ready value set —
+# it's tuned for a single-node kind cluster running meminator.
+#
+# Differences vs. deploy/helm/conduit-agent/values.yaml defaults:
+#
+#   1. obi.enabled: true                — flips on the OBI receiver, eBPF caps,
+#                                          and hostPID per ADR-0020.
+#   2. image.repository / tag           — pulls the locally-built conduit:obi
+#                                          image (loaded into kind via
+#                                          obi-kind-load), not the published
+#                                          ghcr.io image.
+#   3. image.pullPolicy: Never           — kind nodes can't pull conduit:obi
+#                                          from any registry; it lives only
+#                                          in the local Docker daemon.
+#   4. conduit.serviceName: k8s-cluster — matches dashboards/k8s-cluster-overview.json
+#                                          out of the box; OBI traces flow into
+#                                          this dataset.
+#   5. conduit.deploymentEnvironment: local-meminator
+#                                       — keeps local test data isolated from
+#                                          any real "production" / "staging" envs.
+#   6. honeycomb.apiKey is left empty   — the Makefile target sets it from
+#                                          $HONEYCOMB_API_KEY when the env var
+#                                          is present. If unset, the chart still
+#                                          renders a Secret but the agent's
+#                                          OTLP egress fails — fine for testing
+#                                          OBI's eBPF generation in isolation;
+#                                          confirm via the agent's debugexporter
+#                                          logs (verbosity is bumped below).
+#   7. resources                        — slightly bumped to leave headroom for
+#                                          OBI's eBPF instrumentation (it can
+#                                          spike during process discovery).
+
+obi:
+  enabled: true
+  # Default false matches base values.yaml. Flip to true if you want to verify
+  # the connector-suppression path; for the meminator recipe we keep both RED
+  # sources flowing so Honeycomb users can compare OBI's trace-derived
+  # spanmetrics with the M8 connector's output.
+  replaceSpanMetricsConnector: false
+
+image:
+  repository: conduit
+  tag: obi
+  pullPolicy: Never
+
+conduit:
+  serviceName: k8s-cluster
+  deploymentEnvironment: local-meminator
+  profileMode: k8s
+
+honeycomb:
+  # Filled in at install time by `make obi-kind-deploy` (which reads
+  # $HONEYCOMB_API_KEY from the parent shell). Manual flow:
+  #   helm upgrade --install ... --set honeycomb.apiKey=$HONEYCOMB_API_KEY
+  apiKey: ""
+  endpoint: https://api.honeycomb.io
+
+daemonset:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi
+  # hostMounts.enabled: true is already the chart default. We leave it on
+  # because the k8s profile expects it (hostmetrics + filelog/k8s + the
+  # /var/log/pods mount); OBI's hostPID requirement is independent and gets
+  # OR'd in by the chart's daemonset.yaml when obi.enabled=true.

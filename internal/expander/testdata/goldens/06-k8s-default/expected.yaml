@@ -185,6 +185,30 @@ receivers:
       # hosts; operators who want them add `network` via
       # overrides:.
       features: [application]
+    # discovery.instrument is the modern selector form (Globs); it
+    # supersedes the deprecated `services:` (Regex) form. At least
+    # one entry is required to enable FeatureAppO11y — without it
+    # OBI rejects the config at startup ("at least one of 'network',
+    # 'application' or 'stats' features must be enabled"). The
+    # `meter_provider.features: [application]` line above is a
+    # downstream metric-export filter, NOT the on-switch for the
+    # feature itself; that distinction surprises every operator
+    # the first time, including us.
+    #
+    # open_ports: 1-65535 matches every TCP-listening process on
+    # the host / node, which is what zero-code instrumentation
+    # should do by default. OBI's default_exclude_instrument list
+    # automatically skips OBI itself, Prometheus, Jaeger, and the
+    # other usual observability daemons, so this won't loop on
+    # the conduit agent. Operators who want narrower scoping use
+    # overrides.receivers.obi.discovery.instrument: [...] to
+    # replace this with explicit selectors (per-service name,
+    # exe_path glob, namespace, etc.) — see ADR-0020 sub-decision 5
+    # and the "Filtering sensitive data" / "Tail-based sampling"
+    # sections of the OBI Collector-receiver upstream docs.
+    discovery:
+      instrument:
+        - open_ports: 1-65535
     # On the k8s profile, OBI auto-tags spans / metrics with the
     # workload's namespace, pod name, deployment, and node — the
     # same set k8sattributes layers on for OTLP traffic. Off on
@@ -192,7 +216,15 @@ receivers:
     # available there.
     attributes:
       kubernetes:
-        enable: true
+        # Quoted because OBI's kubeflags.EnableFlag is a string-typed field
+        # with `validate:"oneof=true false autodetect"` (see
+        # third_party/obi/pkg/transform/k8s.go in the local checkout). An
+        # unquoted YAML true unmarshals as a Go bool and trips the validator
+        # at collector startup with "Field validation for 'Enable' failed
+        # on the 'oneof' tag." "autodetect" would also work; we emit "true"
+        # because we only render this block when we already know we're on
+        # the k8s profile (OBIK8sMetadata gate above).
+        enable: "true"
 
 processors:
   memory_limiter:

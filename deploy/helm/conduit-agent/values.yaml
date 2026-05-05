@@ -150,6 +150,49 @@ obi:
   # native instrumentation.scope = "obi" tag disambiguates).
   replaceSpanMetricsConnector: false
 
+  # javaTLS enables OBI's bytecode-injecting Java agent (ADR-0020
+  # late-2026 amendment). Required for header capture + W3C
+  # traceparent propagation through TLS-internal Java calls — without
+  # it, OBI sees encrypted bytes only on those connections and Java
+  # service hops emit decorrelated spans. Cost: dynamic JVM attach
+  # overhead at process start. Off by default; flip on for clusters
+  # running mTLS Java fleets.
+  javaTLS: false
+
+  # nodeJS enables OBI's NodeJS instrumentation injector. Without it
+  # the OBI generic tracer logs "trace-context propagation will not
+  # work for NodeJS services!" and Node hops break the trace. Off by
+  # default; flip on for clusters running Node services where you
+  # want trace continuity.
+  nodeJS: false
+
+# ---------------------------------------------------------------------------
+# Conduit overrides: a verbatim splice into the rendered conduit.yaml's
+# top-level `overrides:` section. ADR-0012 names overrides as the only
+# escape hatch from the curated schema — anything not exposed as a
+# first-class chart value lands here, deep-merged into the upstream
+# Collector config at startup. Examples:
+#
+#   conduitOverrides:
+#     receivers:
+#       obi:
+#         # Cross-service context propagation through user-mode write
+#         # syscalls (off by default upstream because it requires
+#         # CAP_SYS_ADMIN bpf_probe_write_user). Flip on for
+#         # end-to-end Java / Node trace continuity over TLS.
+#         ebpf:
+#           context_propagation: all
+#           track_request_headers: true
+#     processors:
+#       batch:
+#         send_batch_size: 16384
+#
+# Empty by default. The chart writes this verbatim into the rendered
+# ConfigMap's conduit.yaml when non-empty, and the agent's overrides
+# loader handles the deep-merge with the curated render.
+# ---------------------------------------------------------------------------
+conduitOverrides: {}
+
 # ---------------------------------------------------------------------------
 # Extra environment variables injected into the conduit container. The
 # typical use is feeding vendor auth tokens to output.otlp.headers or to

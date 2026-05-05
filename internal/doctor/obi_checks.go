@@ -27,6 +27,10 @@ import (
 //  4. BTF type information available at /sys/kernel/btf/vmlinux.
 //  5. The required ambient/effective capabilities are present on
 //     the running process.
+//  6. (When obi.java_tls: true) at least one running JVM is visible
+//     to the discovery loop — without a target there is nothing for
+//     the embedded Java agent to attach to, and the operator likely
+//     misread "Java TLS" as a generic toggle.
 //
 // Each sub-check produces one Result so operators see the full
 // preflight in the report; if any sub-check is FAIL, doctor exits
@@ -95,11 +99,21 @@ func CheckOBIPreflight(ctx Context) []Result {
 		}}
 	}
 
-	return []Result{
+	results := []Result{
 		obiKernelResult(),
 		obiBTFResult(),
 		obiCapsResult(),
 	}
+	// java_tls / nodejs are language-injector toggles that only
+	// matter when the operator opted into them. When off, the
+	// sub-check is silently absent from the report (not a Skip
+	// result — already-skipped check IDs would clutter the doctor
+	// output for the common case). When on, the preflight checks
+	// the runtime evidence the injector actually has a target.
+	if ctx.Config.OBI.JavaTLS != nil && *ctx.Config.OBI.JavaTLS {
+		results = append(results, obiJavaTLSResult())
+	}
+	return results
 }
 
 func obiKernelResult() Result {
@@ -222,6 +236,85 @@ func obiCapsResult() Result {
 			"then `sudo systemctl restart conduit`.", strings.Join(missing, ", ")),
 		DocsURL: docsAnchor(cdt0204ID, "receiver-obi"),
 	}
+}
+
+// obiJavaTLSResult fires only when obi.java_tls is on and asks "is
+// there at least one JVM on this host that the embedded Java agent
+// could attach to?" Implementation: enumerate /proc/<pid>/comm and
+// match "java" (the canonical command name when running the JDK
+// `java` launcher). Hits — PASS with the count. Misses — WARN, not
+// FAIL: the injector handles "no targets" by simply not attaching,
+// and the operator may have flipped java_tls on speculatively before
+// rolling out their Java workload. WARN keeps doctor's exit code
+// clean while still showing the operator the empty-fleet state in
+// the report.
+//
+// Why /proc/<pid>/comm and not the upstream OBI discovery loop: the
+// loop runs inside the collector at startup, after doctor has
+// already returned. Doctor cannot import the OBI runtime (the OBI
+// package is gated behind the linux build tag and pulls in libbpf
+// transitively); it has to read its own evidence from /proc.
+func obiJavaTLSResult() Result {
+	count, err := countJavaProcs()
+	if err != nil {
+		return Result{
+			ID:       cdt0204ID,
+			Title:    "receiver.obi.java_tls",
+			Severity: SeverityWarn,
+			Message: fmt.Sprintf("could not enumerate /proc to count Java processes (%v); "+
+				"the OBI Java agent will still attach at runtime if any JVMs are present.", err),
+			DocsURL: docsAnchor(cdt0204ID, "receiver-obi"),
+		}
+	}
+	if count == 0 {
+		return Result{
+			ID:       cdt0204ID,
+			Title:    "receiver.obi.java_tls",
+			Severity: SeverityWarn,
+			Message: "obi.java_tls is true but no Java processes are running on this host. " +
+				"The embedded Java agent has nothing to attach to until a JVM starts. " +
+				"Set obi.java_tls: false if you don't have Java workloads on this host.",
+			DocsURL: docsAnchor(cdt0204ID, "receiver-obi"),
+		}
+	}
+	return Result{
+		ID:       cdt0204ID,
+		Title:    "receiver.obi.java_tls",
+		Severity: SeverityPass,
+		Message: fmt.Sprintf("found %d running JVM(s); the OBI Java agent will dynamic-attach "+
+			"to each via the HotSpot Attach API.", count),
+		DocsURL: docsAnchor(cdt0204ID, "receiver-obi"),
+	}
+}
+
+// countJavaProcs walks /proc/<pid>/comm entries and returns the count
+// matching "java" exactly. comm is truncated to TASK_COMM_LEN (16
+// bytes incl. NUL); "java" fits comfortably so equality works. Errors
+// reading any single proc are tolerated — pids race with us and a
+// disappeared one is fine; we just don't count it.
+func countJavaProcs() (int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) == 0 || name[0] < '0' || name[0] > '9' {
+			continue
+		}
+		data, err := os.ReadFile("/proc/" + name + "/comm")
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(data)) == "java" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // readKernelVersion parses /proc/sys/kernel/osrelease into (major,

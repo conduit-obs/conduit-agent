@@ -1338,9 +1338,12 @@ func TestExpand_OBI_K8sDefault(t *testing.T) {
 		"\n  obi:\n",
 		"meter_provider:",
 		"features: [application]",
+		"discovery:",
+		"instrument:",
+		"open_ports: 1-65535",
 		"attributes:",
 		"kubernetes:",
-		"enable: true",
+		`enable: "true"`,
 	})
 	if got := pipelineReceivers(t, out, "traces"); !contains(got, "obi") {
 		t.Errorf("traces pipeline must include obi receiver; got %v", got)
@@ -1366,9 +1369,12 @@ func TestExpand_OBI_LinuxOmitsKubernetesAttrs(t *testing.T) {
 	mustContain(t, out, []string{
 		"\n  obi:\n",
 		"features: [application]",
+		"discovery:",
+		"instrument:",
+		"open_ports: 1-65535",
 	})
 	mustNotContain(t, out, []string{
-		"kubernetes:\n        enable: true",
+		"kubernetes:\n        enable: \"true\"",
 	})
 }
 
@@ -1393,6 +1399,68 @@ func TestExpand_OBI_DisabledOmitsBlock(t *testing.T) {
 	if got := pipelineReceivers(t, out, "metrics"); contains(got, "obi") {
 		t.Errorf("metrics pipeline must NOT include obi when disabled; got %v", got)
 	}
+}
+
+// obi.java_tls: true emits the receivers.obi.javaagent.enabled block,
+// which OBI uses as the on-switch for its bytecode-injecting Java
+// agent (loaded via go:embed in upstream pkg/internal/java/embedded/
+// and dynamic-attached to running JVMs through the HotSpot Attach API).
+// The Java agent is what unlocks header capture + traceparent
+// propagation through TLS-internal Java calls, where pure-eBPF
+// instrumentation only sees encrypted bytes. ADR-0020 amendment.
+func TestExpand_OBI_JavaTLSEmitsJavaagentBlock(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on, JavaTLS: &on}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"\n  obi:\n",
+		"javaagent:\n      enabled: true",
+	})
+}
+
+// obi.nodejs: true emits the receivers.obi.nodejs.enabled block —
+// without it OBI's generic eBPF tracer cannot reliably propagate the
+// trace context through libuv's vectored writes for Node services
+// (upstream logs "trace-context propagation will not work for NodeJS
+// services!" when the injector is off). ADR-0020 amendment.
+func TestExpand_OBI_NodeJSEmitsNodejsBlock(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on, NodeJS: &on}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"\n  obi:\n",
+		"nodejs:\n      enabled: true",
+	})
+}
+
+// Default OBI render (no java_tls / nodejs flags) MUST NOT emit the
+// language-injector blocks. Pinning this guards against accidental
+// always-on regression that would consume SYS_PTRACE on every Java /
+// Node process the discovery loop finds, even on operators who only
+// asked for the eBPF-level RED metrics.
+func TestExpand_OBI_DefaultsOmitLanguageAgents(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8s})
+	on := true
+	cfg.OBI = &config.OBI{Enabled: &on}
+
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{
+		"javaagent:",
+		"nodejs:",
+	})
 }
 
 // ADR-0020 sub-decision 3: obi.replace_span_metrics_connector: true

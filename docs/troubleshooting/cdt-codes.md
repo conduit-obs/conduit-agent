@@ -249,7 +249,8 @@ specific path and the matching glob is empty.
 **What it checks**: the OpenTelemetry eBPF Instrumentation receiver
 ([ADR-0020](../adr/adr-0020.md)) is ready to run on this host. The
 check is `SKIP` when `obi.enabled` is false, so non-OBI installs see
-no extra noise. When OBI is enabled the check fires five preflights:
+no extra noise. When OBI is enabled the check fires five preflights,
+plus an optional sixth when the Java agent injector is opted in:
 
 1. **Linux only.** OBI is Linux-only by upstream design; on Darwin /
    Windows / unknown GOOS the check is a single `FAIL` with the
@@ -273,6 +274,15 @@ no extra noise. When OBI is enabled the check fires five preflights:
    `CAP_PERFMON`, `CAP_BPF`. Running as root short-circuits this to
    `PASS` (root has all caps implicitly). Missing caps get `FAIL`
    with the exact set that's absent.
+6. **(Optional) Java targets visible.** Fires only when
+   `obi.java_tls: true`. Walks `/proc/<pid>/comm` for entries equal
+   to `java` and reports the count. Hits → `PASS` ("found N JVMs;
+   the OBI Java agent will dynamic-attach to each"). No hits → `WARN`
+   ("obi.java_tls is true but no Java processes are running on this
+   host"). The injector handles "no targets" by simply not attaching,
+   so this is a configuration smell, not a fatal error — `WARN` keeps
+   doctor's exit code clean while still surfacing the empty-fleet
+   state.
 
 **Why it matters**: OBI fails to load with cryptic eBPF errors when
 the kernel, BTF, or caps don't line up. Catching the missing piece at
@@ -296,6 +306,12 @@ single line of remediation.
   false` and rely on `span_metrics` for RED metrics. The OCB
   pipeline that links OBI in is staged behind a follow-up decision
   per ADR-0020 § "Open question: build pipeline".
+- **`java_tls: true` but no JVMs visible**: either roll out your Java
+  workload before flipping this on, or set `obi.java_tls: false` if
+  you don't expect Java services on this host (the bytecode-injecting
+  agent is only useful on TLS-internal Java fleets — if every Java
+  service in your cluster is plaintext-only, the eBPF tracer alone
+  is sufficient and you can leave the injector off).
 
 **When to escalate**: when every preflight passes but the agent still
 logs eBPF errors at startup. That's an OBI-internal compatibility

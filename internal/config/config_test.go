@@ -982,6 +982,98 @@ obi:
 	}
 }
 
+// obi.java_tls: true while obi.enabled: false is rejected for the same
+// reason the connector toggle is — the language-side injector has no
+// eBPF receiver to feed, so the operator-visible effect is zero. Same
+// shape applies to obi.nodejs: true.
+func TestParse_OBILanguageInjectorsRequireEnabled(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantSub string
+	}{
+		{
+			name: "java_tls",
+			yaml: `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: false
+  java_tls: true
+`,
+			wantSub: "obi.java_tls",
+		},
+		{
+			name: "nodejs",
+			yaml: `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: false
+  nodejs: true
+`,
+			wantSub: "obi.nodejs",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader(tc.yaml))
+			if err == nil {
+				t.Fatalf("Parse: want validation error for %s while OBI is disabled", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error should reference %s; got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+// obi.java_tls: true and obi.nodejs: true with obi.enabled: true
+// parse cleanly and surface as concrete *bool true on the resulting
+// config struct — pointer semantics matter because applyDefaults reads
+// "omitted vs explicit-false" identically to obi.enabled.
+func TestParse_OBILanguageInjectorsParse(t *testing.T) {
+	const yaml = `
+service_name: demo
+deployment_environment: prod
+profile:
+  mode: linux
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+obi:
+  enabled: true
+  java_tls: true
+  nodejs: true
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.OBI == nil {
+		t.Fatal("OBI: nil after parse")
+	}
+	if cfg.OBI.JavaTLS == nil || !*cfg.OBI.JavaTLS {
+		t.Errorf("OBI.JavaTLS: got %v, want *true", cfg.OBI.JavaTLS)
+	}
+	if cfg.OBI.NodeJS == nil || !*cfg.OBI.NodeJS {
+		t.Errorf("OBI.NodeJS: got %v, want *true", cfg.OBI.NodeJS)
+	}
+}
+
 // Profile-default service.name fill-in covers ADR-0021's primary defaulting
 // path: when the operator omits service_name, applyDefaults supplies a
 // platform-shaped default keyed off the resolved profile. Boards under

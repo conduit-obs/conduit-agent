@@ -49,6 +49,61 @@ receivers:
       # hosts; operators who want them add `network` via
       # overrides:.
       features: [application]
+    # discovery.instrument is the modern selector form (Globs); it
+    # supersedes the deprecated `services:` (Regex) form. At least
+    # one entry is required to enable FeatureAppO11y — without it
+    # OBI rejects the config at startup ("at least one of 'network',
+    # 'application' or 'stats' features must be enabled"). The
+    # `meter_provider.features: [application]` line above is a
+    # downstream metric-export filter, NOT the on-switch for the
+    # feature itself; that distinction surprises every operator
+    # the first time, including us.
+    #
+    # open_ports: 1-65535 matches every TCP-listening process on
+    # the host / node, which is what zero-code instrumentation
+    # should do by default. OBI's default_exclude_instrument list
+    # automatically skips OBI itself, Prometheus, Jaeger, and the
+    # other usual observability daemons, so this won't loop on
+    # the conduit agent. Operators who want narrower scoping use
+    # overrides.receivers.obi.discovery.instrument: [...] to
+    # replace this with explicit selectors (per-service name,
+    # exe_path glob, namespace, etc.) — see ADR-0020 sub-decision 5
+    # and the "Filtering sensitive data" / "Tail-based sampling"
+    # sections of the OBI Collector-receiver upstream docs.
+    discovery:
+      instrument:
+        - open_ports: 1-65535
+{{- if .OBIJavaTLS }}
+    # OBI ships an embedded Java instrumentation agent
+    # (pkg/internal/java/embedded/obi-java-agent.jar in upstream,
+    # baked into the conduit binary via go:embed). When enabled, the
+    # discovery loop dynamic-attaches it to running JVMs through the
+    # HotSpot Attach API. Two effects: (1) HTTP/gRPC headers + bodies
+    # become visible on TLS-internal calls (without it OBI sees
+    # encrypted bytes only); (2) the W3C traceparent header gets
+    # injected on outbound calls so downstream services pick up the
+    # parent span — closing the propagation gap that pure-eBPF
+    # context-propagation has on Java's TLS write path.
+    #
+    # Cost: SYS_PTRACE on the target JVM (already required for OBI's
+    # process discovery) plus per-JVM bytecode injection overhead at
+    # attach time. Operators flip this on for TLS-internal Java
+    # fleets (mTLS service mesh, cluster-internal HTTPS); leave it
+    # off for plaintext-only or non-Java workloads.
+    javaagent:
+      enabled: true
+{{- end }}
+{{- if .OBINodeJS }}
+    # OBI's NodeJS instrumentation injector. Without it the OBI
+    # generic tracer logs "trace-context propagation will not work
+    # for NodeJS services!" and each Node hop emits a span without
+    # parent linkage to the upstream caller. Enable for Node fleets
+    # where you want trace continuity through HTTP / gRPC client
+    # calls. Off by default; ADR-0020 sub-decision 5 governs the
+    # curated-surface promotion rationale.
+    nodejs:
+      enabled: true
+{{- end }}
 {{- if .OBIK8sMetadata }}
     # On the k8s profile, OBI auto-tags spans / metrics with the
     # workload's namespace, pod name, deployment, and node — the
@@ -57,7 +112,15 @@ receivers:
     # available there.
     attributes:
       kubernetes:
-        enable: true
+        # Quoted because OBI's kubeflags.EnableFlag is a string-typed field
+        # with `validate:"oneof=true false autodetect"` (see
+        # third_party/obi/pkg/transform/k8s.go in the local checkout). An
+        # unquoted YAML true unmarshals as a Go bool and trips the validator
+        # at collector startup with "Field validation for 'Enable' failed
+        # on the 'oneof' tag." "autodetect" would also work; we emit "true"
+        # because we only render this block when we already know we're on
+        # the k8s profile (OBIK8sMetadata gate above).
+        enable: "true"
 {{- end }}
 {{- end }}
 

@@ -188,7 +188,7 @@ func (v *validator) validateMetrics(m *Metrics) {
 	}
 }
 
-// validateOBI enforces the two cross-field rules ADR-0020 calls out:
+// validateOBI enforces the cross-field rules ADR-0020 calls out:
 //
 //  1. obi.enabled: true is rejected on non-Linux profiles because OBI
 //     is Linux-only by upstream design (kernel 5.8+ / RHEL-family
@@ -201,10 +201,19 @@ func (v *validator) validateMetrics(m *Metrics) {
 //     obi.enabled: false (the toggle would have no effect — surface
 //     the misconfiguration eagerly so it's caught before deploy).
 //
+//  3. obi.java_tls: true and obi.nodejs: true follow the same rule
+//     (rejected when obi.enabled: false) because each toggle layers a
+//     language-specific injector ON TOP OF the eBPF receiver. With the
+//     receiver disabled the injector has nothing to feed; flagging
+//     this combination here keeps the user-facing failure mode "the
+//     config you wrote is contradictory" rather than the runtime
+//     "the language injector loaded an embedded JAR for nothing."
+//
 // The "binary lacks OBI" case (Conduit was built without the OBI
 // receiver compiled in) is doctor's job to surface, not the validator's
 // — the configuration itself is structurally valid, the runtime
-// environment isn't.
+// environment isn't. Same goes for "kernel doesn't expose JVMTI" /
+// "no Java processes on the host"; those are runtime preflights.
 func (v *validator) validateOBI(o *OBI, p *Profile) {
 	if o == nil {
 		return
@@ -227,6 +236,18 @@ func (v *validator) validateOBI(o *OBI, p *Profile) {
 	if !enabled && o.ReplaceSpanMetricsConnector {
 		v.add("obi.replace_span_metrics_connector",
 			"set true while obi.enabled is false; the flag would have no effect. "+
+				"Either set obi.enabled: true, or remove this field.")
+	}
+
+	if !enabled && o.JavaTLS != nil && *o.JavaTLS {
+		v.add("obi.java_tls",
+			"set true while obi.enabled is false; the Java agent injector has no eBPF receiver to feed. "+
+				"Either set obi.enabled: true, or remove this field.")
+	}
+
+	if !enabled && o.NodeJS != nil && *o.NodeJS {
+		v.add("obi.nodejs",
+			"set true while obi.enabled is false; the NodeJS injector has no eBPF receiver to feed. "+
 				"Either set obi.enabled: true, or remove this field.")
 	}
 }
