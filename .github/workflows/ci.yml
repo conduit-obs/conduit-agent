@@ -10,13 +10,16 @@ permissions:
 
 jobs:
   # Reusable composite step: clone the OBI source, generate its eBPF Go
-  # bindings, and inject the `replace go.opentelemetry.io/obi =>
-  # ./third_party/obi` directive into go.mod. Required by every Linux
-  # job because internal/collector/components_obi_linux.go imports OBI
-  # unconditionally on Linux (ADR-0020 sub-decision 1) and the upstream
-  # proxy v0.8.0 doesn't ship the pre-generated BPF Go bindings (ADR-0020
-  # "Open question: build pipeline"). Skipped on macOS / Windows runners
+  # bindings, and write a gitignored go.work that adds ./third_party/obi
+  # to the workspace. Required by every Linux job because
+  # internal/collector/components_obi_linux.go imports OBI unconditionally
+  # on Linux (ADR-0020 sub-decision 1) and the upstream proxy v0.8.0
+  # doesn't ship the pre-generated BPF Go bindings (ADR-0020 "Open
+  # question: build pipeline"). Skipped on macOS / Windows runners
   # because the //go:build linux tag excludes the OBI import there.
+  # Workspace mode (instead of `go mod edit -replace`) keeps committed
+  # go.mod / go.sum byte-identical to HEAD so goreleaser's dirty-state
+  # gate is happy at release time.
   lint:
     name: Lint
     runs-on: ubuntu-latest

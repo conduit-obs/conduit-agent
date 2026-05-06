@@ -35,10 +35,11 @@ The recipe runs four pieces in one kind cluster:
 
 # 1. Clone OBI at the pinned tag (see Makefile OBI_VERSION) and run upstream's
 #    `make docker-generate` inside it to produce the eBPF Go bindings. Needs
-#    Docker. ~2–4 min on first run; idempotent. Also injects
-#    `replace go.opentelemetry.io/obi => ./third_party/obi` into go.mod
-#    via `go mod edit` so subsequent Linux builds resolve OBI from the local
-#    checkout (the upstream proxy v0.8.0 lacks pre-generated BPF bindings).
+#    Docker. ~2–4 min on first run; idempotent. Also writes a gitignored
+#    `go.work` adding ./third_party/obi to the workspace so subsequent Linux
+#    builds resolve OBI from the local checkout (the upstream proxy v0.8.0
+#    lacks pre-generated BPF bindings). The committed go.mod / go.sum stay
+#    untouched — this is what lets goreleaser ship from a clean tag.
 make obi-vendor
 
 # 2. Cross-compile a Linux binary with OBI linked in (the //go:build linux
@@ -47,7 +48,9 @@ make obi-vendor
 make obi-image
 ```
 
-When you're done, `make obi-clean` drops the replace directive from go.mod.
+When you're done, `make obi-clean` removes go.work + go.work.sum so the
+toolchain falls back to the committed go.mod (without the OBI workspace,
+Linux builds will fail at the `make build` guard, which is intentional).
 The third_party/obi/ checkout and the conduit:obi image are left in place
 so the next iteration is fast; delete them manually to fully reset.
 
@@ -118,8 +121,8 @@ and `InstrumentationScope #0 obi`. If you don't see them: see Troubleshooting.
 # Cluster only — preserves the OBI checkout + image for next time.
 make kind-down
 
-# Drop the OBI replace directive from go.mod when you're done with the
-# session (committed go.mod has require but no replace). third_party/obi/
+# Remove the OBI go.work + go.work.sum when you're done with the session
+# (committed go.mod is the source of truth without them). third_party/obi/
 # and the conduit:obi image stay; delete them manually to reclaim disk.
 make obi-clean
 ```

@@ -55,14 +55,15 @@ jobs:
         # internal/collector/components_obi_linux.go, which imports
         # go.opentelemetry.io/obi/collector. Upstream proxy v0.8.0
         # ships no eBPF Go bindings (ADR-0020 "Open question: build
-        # pipeline"), so we clone OBI source and run upstream's
-        # `make docker-generate` here, then inject the
-        # `replace go.opentelemetry.io/obi => ./third_party/obi`
-        # directive into go.mod via `go mod edit`. Goreleaser's
-        # subsequent build step picks up the replace and links the
+        # pipeline"), so we clone OBI source, run upstream's
+        # `make docker-generate` here, and write a gitignored go.work
+        # adding ./third_party/obi to the workspace. Goreleaser's
+        # subsequent build step picks up the workspace and links the
         # generated bindings into the Linux artifacts. macOS / Windows
         # artifacts skip the OBI import via the //go:build tag and
-        # are unaffected.
+        # are unaffected. Workspace mode (vs. `go mod edit -replace`)
+        # is what lets the tagged tree stay clean — goreleaser's
+        # dirty-state gate killed the v0.0.4 release before this fix.
         run: make obi-vendor
 
       - name: Pre-flight (test + vulncheck on the exact tagged commit)

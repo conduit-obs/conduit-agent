@@ -22,13 +22,17 @@ coverage.txt
 # Go module cache (in case anyone vendors locally)
 vendor/
 
-# OBI local-only build path (resolves ADR-0020's "Open question: build pipeline"
-# for the local case; the public release pipeline does not link OBI). Cloned
-# and codegen'd by `make obi-vendor` from upstream go.opentelemetry.io/obi at
-# the pinned tag. Not committed because (a) the OBI checkout is multi-MB of
-# generated eBPF C and Go bindings, and (b) the public release does not depend
-# on it. See tools/local-k8s/README.md.
+# OBI local-only build path (ADR-0020 sub-decision 1: every Linux conduit
+# binary links OBI in). `make obi-vendor` clones upstream go.opentelemetry.io/
+# obi at the pinned tag, generates its eBPF Go bindings, and writes a go.work
+# pointing the toolchain at the local checkout. None of these artifacts are
+# committed: the OBI tree is multi-MB of generated eBPF C/Go bindings, and
+# the workspace file must NOT be in commits or it would mutate the tagged
+# tree (goreleaser's dirty-state gate, see ADR-0020 "Build pipeline"). CI
+# regenerates everything on every Linux job. See tools/local-k8s/README.md.
 third_party/obi/
+go.work
+go.work.sum
 
 # IDE / editor scratch
 .idea/

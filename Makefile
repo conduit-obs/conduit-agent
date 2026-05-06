@@ -53,11 +53,12 @@ help: ## Show available make targets
 
 build: ## Build the conduit binary into ./bin/conduit. On Linux, requires `make obi-vendor` first (OBI is compiled in unconditionally per ADR-0020 sub-decision 1).
 	@mkdir -p $(BIN_DIR)
-	@if [ "$(GOOS)" = "linux" ] && [ ! -d "third_party/obi/pkg" ]; then \
-		echo "make build: this is a Linux build and third_party/obi/ is missing or empty."; \
+	@if [ "$(GOOS)" = "linux" ] && { [ ! -d "third_party/obi/pkg" ] || [ ! -f "go.work" ]; }; then \
+		echo "make build: this is a Linux build but the OBI workspace isn't set up."; \
 		echo "Linux conduit binaries link OBI unconditionally (ADR-0020 sub-decision 1)."; \
-		echo "Run 'make obi-vendor' once to clone OBI + generate its eBPF Go bindings,"; \
-		echo "then re-run 'make build'. macOS / Windows builds skip OBI via //go:build tags"; \
+		echo "Run 'make obi-vendor' once to clone OBI, generate its eBPF Go bindings,"; \
+		echo "and write the gitignored go.work that points the build at the local checkout."; \
+		echo "Then re-run 'make build'. macOS / Windows builds skip OBI via //go:build tags"; \
 		echo "and do not need this step."; \
 		exit 1; \
 	fi
@@ -203,14 +204,19 @@ kind-smoketest: kind-up kind-image kind-load kind-deploy kind-test ## Full kind 
 # pre-generated eBPF Go bindings (see ADR-0020 "Open question: build
 # pipeline"), so a real Linux build needs them generated locally. `make
 # obi-vendor` clones third_party/obi/ from upstream, runs upstream's `make
-# docker-generate` to produce the bindings, and injects the
-# `replace go.opentelemetry.io/obi => ./third_party/obi` line into go.mod
-# via `go mod edit`. The committed go.mod has the require line but NO
-# replace; obi-vendor adds the replace, obi-clean drops it. third_party/obi/
-# is gitignored — the replace directive only ever lives in working trees.
+# docker-generate` to produce the bindings, and writes a gitignored go.work
+# pointing the toolchain at the local checkout.
+#
+# Why a Go workspace (go.work) instead of `go mod edit -replace`: goreleaser
+# refuses to build from a dirty tree, and editing go.mod / running `go mod
+# tidy` at vendor time leaves both files modified relative to the tagged
+# commit. Workspaces resolve the OBI require against ./third_party/obi
+# without touching go.mod or go.sum, so `git status` stays clean post-vendor
+# and goreleaser's "previous=v… current=v…" gate is satisfied. Workspaces
+# are the Go-blessed mechanism for exactly this case (since 1.18).
 #
 # Typical local flow on Linux:
-#   make obi-vendor    # one-time per machine: clone OBI + codegen bindings
+#   make obi-vendor    # one-time per machine: clone OBI + codegen bindings + write go.work
 #   make build         # produces ./bin/conduit with OBI linked
 #   make obi-image     # produces conduit:obi container (cross-compiles on host)
 #
@@ -229,7 +235,7 @@ OBI_IMAGE ?= conduit:obi
 # default smoke flow expects.
 OBI_KIND_RELEASE ?= $(KIND_RELEASE)
 
-obi-vendor: ## Clone go.opentelemetry.io/obi into third_party/obi/, generate its eBPF Go bindings, and inject the replace directive into go.mod
+obi-vendor: ## Clone go.opentelemetry.io/obi into third_party/obi/, generate its eBPF Go bindings, and write a gitignored go.work that uses the local checkout
 	@if [ -d "$(OBI_DIR)/.git" ]; then \
 		echo "OBI checkout already at $(OBI_DIR); skipping clone. Delete the directory and re-run to refresh."; \
 	else \
@@ -240,16 +246,21 @@ obi-vendor: ## Clone go.opentelemetry.io/obi into third_party/obi/, generate its
 	@echo "Generating eBPF Go bindings in $(OBI_DIR) (Docker required; ~2 min first run)..."
 	@command -v docker >/dev/null 2>&1 || { echo "obi-vendor: docker not found on PATH; OBI's make docker-generate requires it"; exit 1; }
 	@$(MAKE) -C $(OBI_DIR) docker-generate
-	@echo "Injecting replace directive into go.mod (idempotent)..."
-	@$(GO) mod edit -replace=go.opentelemetry.io/obi=./$(OBI_DIR)
-	@$(GO) mod tidy
-	@echo "OBI vendored at $(OBI_DIR) and wired into go.mod. 'make build' on Linux now links OBI in."
+	@# Write a Go workspace file so `go build`/`go test` resolve the OBI
+	@# `require` line in the committed go.mod against the local checkout
+	@# instead of the upstream proxy. This keeps the committed go.mod /
+	@# go.sum bit-identical to HEAD — goreleaser's "git is dirty" gate
+	@# rejected the previous approach (mutating go.mod with `go mod edit
+	@# -replace`) on every release tag. go.work is gitignored, so the
+	@# workspace only ever lives in working trees + CI runners.
+	@echo "Writing go.work to use ./$(OBI_DIR) (committed go.mod / go.sum left untouched)..."
+	@printf 'go 1.25.9\n\nuse (\n\t.\n\t./$(OBI_DIR)\n)\n' > go.work
+	@echo "OBI vendored at $(OBI_DIR); go.work points the build at it. 'make build' on Linux now links OBI in."
 
-obi-clean: ## Drop the OBI replace directive from go.mod; safe to run from any state (idempotent)
-	@echo "Reverting OBI replace directive from go.mod..."
-	@$(GO) mod edit -dropreplace=go.opentelemetry.io/obi
-	@$(GO) mod tidy
-	@echo "go.mod restored to committed shape (require kept; replace dropped). third_party/obi/ left in place; rm -rf to discard."
+obi-clean: ## Remove go.work + go.work.sum so the toolchain falls back to the committed go.mod (idempotent)
+	@echo "Removing go.work and go.work.sum (committed go.mod is the source of truth without them)..."
+	@rm -f go.work go.work.sum
+	@echo "Workspace cleared. third_party/obi/ left in place; rm -rf to discard."
 
 OBI_IMAGE_STAGE := $(DIST_DIR)/conduit-obi-image
 # Default to the host architecture for the kind-target build. kind nodes on

@@ -481,9 +481,13 @@ require (
 // build needs them generated locally. `make obi-vendor` solves this
 // by (a) cloning the OBI source into third_party/obi/, (b) running
 // upstream's `make docker-generate` to produce the bindings, and
-// (c) injecting `replace go.opentelemetry.io/obi => ./third_party/obi`
-// into this go.mod via `go mod edit`. `make obi-clean` reverses (c).
-// Linux CI runners run obi-vendor before any Go toolchain step
-// (.github/workflows/ci.yml); the third_party/obi/ tree is gitignored
-// so the replace directive only ever lives in working trees, never
-// in commits.
+// (c) writing a gitignored go.work that adds ./third_party/obi to
+// the workspace. The require line below is the SAME on every
+// platform; the workspace overrides resolution to the local copy
+// only when it's present. `make obi-clean` removes go.work.
+//
+// Why a workspace and not a `replace` directive in this file:
+// goreleaser refuses to build from a dirty tree, and `go mod edit
+// -replace` plus `go mod tidy` would mutate go.mod / go.sum at
+// vendor time. Workspaces are the Go-blessed mechanism for local
+// overrides (since 1.18) and leave this file bit-identical to HEAD.
