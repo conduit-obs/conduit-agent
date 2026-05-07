@@ -136,9 +136,18 @@ jobs:
           cosign-release: v2.4.0
       - name: Log in to ghcr.io
         run: helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
-      - name: Sync chart version with the tag
-        # The chart version in deploy/helm/conduit-agent/Chart.yaml
-        # tracks the release tag. CI fails the publish if they drift.
+      - name: Sync chart version + appVersion with the tag
+        # `version:` is the operator-facing chart SemVer and is committed
+        # in lock-step with the tag — drift fails the publish on purpose.
+        # `appVersion:` is the agent binary version the chart points at
+        # via .Chart.AppVersion and is committed as "0.0.0-dev" so local
+        # `helm template` runs of an unreleased chart don't pretend to
+        # ship a real binary tag. At publish time we sed it to the tag
+        # so the OCI-published Chart.yaml's appVersion matches the
+        # ghcr.io/conduit-obs/conduit-agent:<tag> image goreleaser just
+        # pushed. Without this, the rendered image.tag fell back to
+        # "0.0.0-dev" and pods hit ImagePullBackOff (caught after v0.0.4
+        # in a live deploy).
         run: |
           tag="${GITHUB_REF_NAME#v}"
           chart=$(awk '/^version:/ {print $2; exit}' deploy/helm/conduit-agent/Chart.yaml)
@@ -146,6 +155,10 @@ jobs:
             echo "::error::tag $tag does not match chart version $chart"
             exit 1
           fi
+          sed -i.bak 's/^appVersion:.*/appVersion: "'"$tag"'"/' deploy/helm/conduit-agent/Chart.yaml
+          rm -f deploy/helm/conduit-agent/Chart.yaml.bak
+          echo "Set appVersion to $tag for this publish"
+          grep '^appVersion:' deploy/helm/conduit-agent/Chart.yaml
       - name: Package + push + sign
         run: make helm-publish
 

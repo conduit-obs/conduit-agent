@@ -19,16 +19,26 @@ export function k8sBlocks(state: WizardState): CommandBlock[] {
   if (state.collect.has("obi_zero_code")) {
     sets.push("--set obi.enabled=true");
   }
+  // Resolve the latest tag at install time (mirrors darwin.ts) so the
+  // wizard never ships a stale or placeholder version. Also pin
+  // image.tag to the same value: the chart's appVersion fallback was
+  // shipped at "0.0.0-dev" through v0.0.4, and even after the release
+  // pipeline starts syncing appVersion, an explicit image.tag makes
+  // the install reproducible regardless of what's baked into the
+  // chart you happened to pull.
   const setLine = sets.length ? ` \\\n  ${sets.join(" \\\n  ")}` : "";
   return [
     {
       title: "1. Install with Helm",
       description:
         "The chart is published to GHCR as an OCI artifact (cosign-signed). It deploys a DaemonSet running one agent pod per node with kubeletstats + filelog/k8s + k8sattributes pre-wired.",
-      body: `helm install conduit \\
+      body: `VERSION=$(curl -fsSL https://api.github.com/repos/conduit-obs/conduit-agent/releases/latest \\
+  | grep tag_name | head -1 | cut -d'"' -f4)
+helm install conduit \\
   oci://ghcr.io/conduit-obs/charts/conduit-agent \\
-  --version 0.0.x \\
-  --namespace conduit --create-namespace${setLine}
+  --version "\${VERSION#v}" \\
+  --namespace conduit --create-namespace \\
+  --set image.tag="\${VERSION#v}"${setLine}
 
 kubectl -n conduit rollout status ds/conduit-conduit-agent --timeout=120s`,
       lang: "bash",
