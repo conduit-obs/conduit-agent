@@ -27,12 +27,12 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver v0.151.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/collector/component v1.57.0
-	go.opentelemetry.io/collector/confmap v1.57.0
+	go.opentelemetry.io/collector/confmap v1.58.0
 	go.opentelemetry.io/collector/confmap/provider/envprovider v1.57.0
 	go.opentelemetry.io/collector/confmap/provider/fileprovider v1.57.0
 	go.opentelemetry.io/collector/confmap/provider/httpprovider v1.57.0
 	go.opentelemetry.io/collector/confmap/provider/httpsprovider v1.57.0
-	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.57.0
+	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.58.0
 	go.opentelemetry.io/collector/connector v0.151.0
 	go.opentelemetry.io/collector/exporter v1.57.0
 	go.opentelemetry.io/collector/exporter/debugexporter v0.151.0
@@ -368,7 +368,7 @@ require (
 	go.opentelemetry.io/collector/extension/extensionmiddleware v0.151.0 // indirect
 	go.opentelemetry.io/collector/extension/extensiontest v0.151.0 // indirect
 	go.opentelemetry.io/collector/extension/xextension v0.151.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.57.0 // indirect
+	go.opentelemetry.io/collector/featuregate v1.58.0 // indirect
 	go.opentelemetry.io/collector/filter v0.151.0 // indirect
 	go.opentelemetry.io/collector/internal/componentalias v0.151.0 // indirect
 	go.opentelemetry.io/collector/internal/fanoutconsumer v0.151.0 // indirect
