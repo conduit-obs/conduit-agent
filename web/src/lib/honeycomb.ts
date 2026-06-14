@@ -204,6 +204,7 @@ export function newHoneycombClient(opts: {
             query_panel: {
               query_id: match.queryId,
               query_annotation_id: match.annotationId,
+              ...queryPanelDisplayOverrides(p.display_style, p.chart_type),
             },
             position,
           };
@@ -329,6 +330,7 @@ function boardManifestPlaceholder(board: Board): unknown {
         query_panel: {
           query_id: `__QID_${idx}__`,
           query_annotation_id: `__AID_${idx}__`,
+          ...queryPanelDisplayOverrides(p.display_style, p.chart_type),
         },
         position,
       };
@@ -374,6 +376,51 @@ function layoutPanels(
     rowMaxHeight = Math.max(rowMaxHeight, height);
   }
   return positions;
+}
+
+// queryPanelDisplayOverrides translates the bundled-JSON display fields
+// (display_style + chart_type, per dashboards/README.md) to the right
+// shape on Honeycomb's QueryPanel — which is two different API fields:
+//
+//   * query_style ∈ {graph, table, combo} controls whether the panel
+//     renders as a chart, a sortable table (top-N ranked lists like
+//     "Top Log Templates"), or both side-by-side. Driven by
+//     display_style; defaults to the API default of "graph".
+//   * visualization_settings.charts[].chart_type ∈ {default, line,
+//     stacked, stat, tsbar, cbar, cpie} controls the chart shape when
+//     query_style is graph or combo. Driven by chart_type; the JSON
+//     also accepts "bar" as a synonym for "cbar" (categorical bar)
+//     since Honeycomb's API rejects the bare "bar" name.
+function queryPanelDisplayOverrides(
+  displayStyle: string | undefined,
+  chartType: string | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const ds = displayStyle?.trim().toLowerCase();
+  if (ds === "table" || ds === "combo") {
+    out.query_style = ds;
+  }
+  if (ds !== "table") {
+    const ct = chartType?.trim().toLowerCase();
+    if (ct && ct !== "default") {
+      const vizMap: Record<string, string> = {
+        line: "line",
+        stacked: "stacked",
+        stat: "stat",
+        tsbar: "tsbar",
+        cbar: "cbar",
+        cpie: "cpie",
+        bar: "cbar",
+      };
+      const mapped = vizMap[ct];
+      if (mapped) {
+        out.visualization_settings = {
+          charts: [{ chart_index: 0, chart_type: mapped }],
+        };
+      }
+    }
+  }
+  return out;
 }
 
 // toWireTags translates the human-editable "key:value" tag strings stored
