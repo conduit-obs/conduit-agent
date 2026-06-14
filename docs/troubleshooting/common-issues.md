@@ -45,15 +45,15 @@ cases for "no data":
 
 ```sh
 # Linux
-sudo journalctl -u conduit | grep -E 'TracesExporter|MetricsExporter|LogsExporter' | tail
+sudo journalctl -u conduit | grep '"otelcol.component.id": "debug"' | tail
 # Docker
-docker logs conduit | grep -E 'TracesExporter|MetricsExporter|LogsExporter' | tail
+docker logs conduit | grep '"otelcol.component.id": "debug"' | tail
 # Kubernetes
-kubectl -n conduit logs -l app.kubernetes.io/name=conduit-agent --tail=200 | grep Exporter
+kubectl -n conduit logs -l app.kubernetes.io/name=conduit-agent --tail=200 | grep '"otelcol.component.id": "debug"'
 ```
 
-You should see lines like `{"items": 42}` showing batches with
-non-zero counts going out. If counts are zero, the receivers aren't
+You should see lines like `... "resource spans": 1, "spans": 42` showing
+batches with non-zero counts going out. If counts are zero, the receivers aren't
 producing anything — jump to ["No metrics" / "No traces" / "No logs"](#no-metrics--no-traces--no-logs)
 below.
 

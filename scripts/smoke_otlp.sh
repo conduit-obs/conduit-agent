@@ -87,11 +87,12 @@ echo "smoke_otlp: sending synthetic spans"
 "$BIN" send-test-data --target "$TARGET" --duration 2s --rate 5 --profile red
 
 # Give the agent a moment to flush the debug exporter, then assert it logged
-# the received trace. "TracesExporter" is the debug exporter's per-batch log
-# line at the default (basic) verbosity.
+# the received trace. At basic verbosity the debug exporter logs one line per
+# batch tagged with its component id and signal; this marker matches that line
+# (and not the upstream honeycomb 401-drop line, which has no "resource spans").
 found=0
 for _ in $(seq 1 20); do
-    if grep -qE "TracesExporter|conduit-send-test-data" "$LOG"; then
+    if grep -qE '"otelcol.signal": "traces", "resource spans"' "$LOG"; then
         found=1
         break
     fi

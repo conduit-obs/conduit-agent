@@ -104,7 +104,7 @@ func runE(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Fprintf(out, "send-test-data: sent %d spans (profile=%s) to %s\n", sent, profile, url)
+	_, _ = fmt.Fprintf(out, "send-test-data: sent %d spans (profile=%s) to %s\n", sent, profile, url)
 	return nil
 }
 
@@ -125,7 +125,7 @@ func post(ctx context.Context, client *http.Client, url string, body []byte) err
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("unexpected status %s: %s", resp.Status, bytes.TrimSpace(snippet))

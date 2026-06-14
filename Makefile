@@ -214,7 +214,7 @@ kind-test: ## Send a test trace and verify the agent received it
 	@echo "Checking conduit's debug exporter logs for the trace..."
 	@kubectl --context kind-$(KIND_CLUSTER) -n $(KIND_NAMESPACE) logs \
 		-l app.kubernetes.io/name=conduit-agent --tail=200 \
-		| grep -E "(TracesExporter|kind-smoke|smoketest)" \
+		| grep -E '"otelcol.signal": "traces", "resource spans"' \
 		|| { echo "kind-test: agent did not log the trace; full pod logs:"; \
 		     kubectl --context kind-$(KIND_CLUSTER) -n $(KIND_NAMESPACE) logs \
 		       -l app.kubernetes.io/name=conduit-agent --tail=200; exit 1; }
@@ -292,7 +292,7 @@ obi-vendor: ## Clone go.opentelemetry.io/obi into third_party/obi/, generate its
 	@# -replace`) on every release tag. go.work is gitignored, so the
 	@# workspace only ever lives in working trees + CI runners.
 	@echo "Writing go.work to use ./$(OBI_DIR) (committed go.mod / go.sum left untouched)..."
-	@printf 'go 1.25.9\n\nuse (\n\t.\n\t./$(OBI_DIR)\n)\n' > go.work
+	@printf 'go 1.25.10\n\nuse (\n\t.\n\t./$(OBI_DIR)\n)\n' > go.work
 	@echo "OBI vendored at $(OBI_DIR); go.work points the build at it. 'make build' on Linux now links OBI in."
 
 obi-clean: ## Remove go.work + go.work.sum so the toolchain falls back to the committed go.mod (idempotent)

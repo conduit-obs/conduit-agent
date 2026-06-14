@@ -263,7 +263,7 @@ sudo journalctl -u conduit | grep -E 'CDT[0-9]{4}'
   `sudo systemctl cat conduit | grep EnvironmentFile`.
 - Confirm `output.endpoint_reachable` passes (see above).
 - Check the agent's debug-exporter output for batches actually going
-  out: `sudo journalctl -u conduit | grep TracesExporter | tail`.
+  out: `sudo journalctl -u conduit | grep '"otelcol.component.id": "debug"' | tail`.
 
 ## Next steps
 

@@ -53,15 +53,15 @@ func NewCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 			if short, _ := cmd.Flags().GetBool("short"); short {
-				fmt.Fprintln(out, version)
+				_, _ = fmt.Fprintln(out, version)
 				return nil
 			}
-			fmt.Fprintf(out, "conduit %s\n", version)
-			fmt.Fprintf(out, "  commit:         %s\n", commit)
-			fmt.Fprintf(out, "  built:          %s\n", date)
-			fmt.Fprintf(out, "  otel collector: %s\n", otelCollectorVersion)
-			fmt.Fprintf(out, "  go:             %s\n", runtime.Version())
-			fmt.Fprintf(out, "  platform:       %s/%s\n", runtime.GOOS, runtime.GOARCH)
+			_, _ = fmt.Fprintf(out, "conduit %s\n", version)
+			_, _ = fmt.Fprintf(out, "  commit:         %s\n", commit)
+			_, _ = fmt.Fprintf(out, "  built:          %s\n", date)
+			_, _ = fmt.Fprintf(out, "  otel collector: %s\n", otelCollectorVersion)
+			_, _ = fmt.Fprintf(out, "  go:             %s\n", runtime.Version())
+			_, _ = fmt.Fprintf(out, "  platform:       %s/%s\n", runtime.GOOS, runtime.GOARCH)
 			return nil
 		},
 	}

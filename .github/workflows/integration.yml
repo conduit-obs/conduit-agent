@@ -48,7 +48,7 @@ jobs:
           - os: ubuntu-latest      # linux/amd64
           - os: ubuntu-24.04-arm   # linux/arm64
           - os: macos-latest       # darwin/arm64
-          - os: macos-13           # darwin/amd64
+          - os: macos-15-intel     # darwin/amd64 (macos-13 was retired)
           - os: windows-latest     # windows/amd64
     steps:
       - uses: actions/checkout@v4
@@ -152,7 +152,7 @@ jobs:
           conduit send-test-data --target 127.0.0.1:4318 --duration 2s --rate 5 --profile red
           ok=0
           for _ in $(seq 1 20); do
-            if sudo journalctl -u conduit --no-pager | grep -qE "TracesExporter|conduit-send-test-data"; then ok=1; break; fi
+            if sudo journalctl -u conduit --no-pager | grep -qE '"otelcol.signal": "traces", "resource spans"'; then ok=1; break; fi
             sleep 0.5
           done
           [ "$ok" = 1 ] || { echo "agent never logged the trace"; sudo journalctl -u conduit --no-pager; exit 1; }
@@ -246,7 +246,7 @@ jobs:
             conduit:itest send-test-data --target 127.0.0.1:4318 --duration 2s --rate 5 --profile red
           ok=0
           for _ in $(seq 1 20); do
-            if docker logs conduit-itest 2>&1 | grep -qE "TracesExporter|conduit-send-test-data"; then ok=1; break; fi
+            if docker logs conduit-itest 2>&1 | grep -qE '"otelcol.signal": "traces", "resource spans"'; then ok=1; break; fi
             sleep 0.5
           done
           [ "$ok" = 1 ] || { echo "image never logged the trace"; docker logs conduit-itest; exit 1; }

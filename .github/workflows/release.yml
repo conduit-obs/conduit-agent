@@ -82,6 +82,10 @@ jobs:
     name: Goreleaser
     runs-on: ubuntu-latest
     needs: [preflight, integration]
+    # secrets context isn't available in step `if:`; surface the GPG-key
+    # presence as a job-level env so the import + sign steps can gate on it.
+    env:
+      HAS_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
     steps:
       - name: Check out at the tag
         uses: actions/checkout@v4
@@ -109,7 +113,7 @@ jobs:
       - name: Import GPG signing key
         # Gated: a fork without the secret skips this and goreleaser's signs:
         # block is skipped below, so the rest of the release still rehearses.
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        if: env.HAS_GPG == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -134,7 +138,7 @@ jobs:
         # hard-fail on a keyless fork. cosign keyless image signing needs no
         # secret and is unaffected.
         run: |
-          if [ -z "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+          if [ "$HAS_GPG" != "true" ]; then
             echo "extra=--skip=sign" >> "$GITHUB_OUTPUT"
             echo "::warning::GPG_PRIVATE_KEY not set; skipping GPG signing of checksums"
           else
@@ -202,6 +206,10 @@ jobs:
     name: Windows MSI build + sign
     runs-on: windows-latest
     needs: goreleaser
+    # secrets context isn't available in step `if:`; surface cert presence as
+    # a job-level env so the Authenticode steps can gate on it.
+    env:
+      HAS_CERT: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -235,7 +243,7 @@ jobs:
           if ($st) { "path=$($st.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
           else { "path=signtool" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
       - name: Authenticode-sign conduit.exe
-        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        if: env.HAS_CERT == 'true'
         shell: pwsh
         env:
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
@@ -263,7 +271,7 @@ jobs:
             -dVersion=${{ steps.ver.outputs.msiver }}
           light conduit.wixobj -ext WixUtilExtension -out conduit.msi
       - name: Authenticode-sign the MSI
-        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        if: env.HAS_CERT == 'true'
         shell: pwsh
         env:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
