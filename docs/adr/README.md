@@ -46,6 +46,7 @@ open question matured into a decision. Once Accepted, ADRs are immutable.
 | [0019](adr-0019.md) | Container image published to ghcr.io/conduit-obs/conduit-agent |
 | [0020](adr-0020.md) | Zero-code application instrumentation via OBI as a Collector receiver |
 | [0021](adr-0021.md) | Profile-default service.name and resource-processor insert semantics |
+| [0022](adr-0022.md) | Scope RED derivation to request-like spans; stable + legacy HTTP semconv dimensions |
 
 ## Adding a new ADR
 

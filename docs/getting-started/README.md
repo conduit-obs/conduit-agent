@@ -37,8 +37,10 @@ After the platform install, optionally:
   includes a verification step that runs the full check catalog and
   exits non-zero on any failure, so install scripts can gate on it.
 - RED metrics from spans (request count, error count, duration
-  histogram) tee'd off the traces pipeline before any sampling
-  step, so derived metrics see 100% of traffic.
+  histogram) derived from request-like (server / consumer) spans on a
+  dedicated pipeline before any sampling step, so derived metrics see
+  100% of request traffic while every span still reaches your
+  destination.
 
 ## After the install
 

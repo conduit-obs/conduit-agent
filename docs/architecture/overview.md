@@ -66,37 +66,42 @@ changes, the rest is shared.
 ```
 your app ── OTLP/HTTP ──▶ [otlp receiver]
                             │
-                            ▼
-              [memory_limiter processor]
-                            │
-                            ▼
-            [resourcedetection processor]
-                            │
-                            ▼
-              [k8sattributes processor]   (k8s profile only)
-                            │
-                            ▼
-                 [resource processor]
-                            │
-                            ▼
-            [transform/logs processor]    (logs pipeline only)
-                            │
-                            ▼
-            ┌───────────────┴───────────────┐
-            │                               │
-            ▼                               ▼
-   [span_metrics connector]          [batch processor]
-   (traces → RED metrics tee)               │
-            │                               ▼
-            ▼                       [otlphttp/honeycomb exporter]
-   [batch processor]                        │
-            │                               ▼
-            ▼                            Honeycomb
-   [otlphttp/honeycomb exporter]
-            │
-            ▼
-        Honeycomb
+        ┌───────────────────┴───────────────────┐
+        │ (the receiver fans every span out      │
+        │  to both traces pipelines)             │
+        ▼                                        ▼
+  traces (main)                            traces/red (RED derivation)
+  [memory_limiter]                         [memory_limiter]
+        │                                        │
+        ▼                                        ▼
+  [resourcedetection]                      [resourcedetection]
+        │                                        │
+        ▼                                        ▼
+  [k8sattributes] (k8s only)               [k8sattributes] (k8s only)
+        │                                        │
+        ▼                                        ▼
+  [resource]                               [resource]
+        │                                        │
+        ▼                                        ▼
+  [batch]                                  [filter/red_requests]
+        │                                  (keep Server / Consumer spans)
+        ▼                                        │
+  [otlphttp/honeycomb]                           ▼
+        │                                  [batch]
+        ▼                                        │
+    Honeycomb  ◀── every span                    ▼
+                                           [span_metrics connector]
+                                                 │
+                                                 ▼
+                                           metrics pipeline ──▶ Honeycomb
+                                           (RED: rate / errors / duration)
 ```
+
+The main traces pipeline ships **every** span to Honeycomb for rich
+troubleshooting; the `traces/red` pipeline derives RED metrics from
+request-like spans only and never mutates the trace stream. Logs flow
+through their own pipeline (the `transform/logs` processor runs there,
+not on traces). See [ADR-0022](../adr/adr-0022.md).
 
 ### The pipeline cast, briefly
 
@@ -108,7 +113,8 @@ your app ── OTLP/HTTP ──▶ [otlp receiver]
 | `k8sattributes` processor | k8s profile only. Enriches signals with `k8s.deployment.name`, `k8s.daemonset.name`, `k8s.pod.uid`, etc., correlating by source IP / pod UID / connection. |
 | `resource` processor | Pins `service.name` + `deployment.environment` from `conduit.yaml` if the SDK didn't set them. |
 | `transform/logs` processor | Logs pipeline only. Runs OTTL rules to redact common credential shapes (`Authorization` headers, AWS access key IDs, etc.). See [ADR-0010](../adr/adr-0010.md). |
-| `span_metrics` connector | Tees RED metrics (request count, error count, duration histogram) off the traces pipeline before any sampling step, so derived metrics see 100% of traffic. See [ADR-0006](../adr/adr-0006.md). |
+| `filter/red_requests` processor | `traces/red` pipeline only. Keeps only `Server` / `Consumer` spans so RED is derived from inbound serviced requests, not client / internal / producer spans. See [ADR-0022](../adr/adr-0022.md). |
+| `span_metrics` connector | Derives RED metrics (request count, error count via `status.code`, duration histogram) from the dedicated `traces/red` pipeline before any sampling step, so derived metrics see 100% of request traffic. See [ADR-0006](../adr/adr-0006.md) and [ADR-0022](../adr/adr-0022.md). |
 | `batch` processor | Batches by size + age. Standard upstream defaults; the `overrides:` escape hatch is the way to retune. |
 | `otlphttp/honeycomb` (or `otlphttp` / `otlp/refinery` / `otlp/gateway`) exporter | The egress. Carries `x-honeycomb-team` for the Honeycomb preset, or whatever headers `output.otlp.headers:` declares. |
 
@@ -181,12 +187,18 @@ The trade-offs are real and Conduit doesn't hide them:
 
 ## RED metrics from spans
 
-The `span_metrics` connector lives **before** any sampling step in
-the traces pipeline, so RED metrics see 100% of traffic even when
-operators tail-sample downstream. The default dimension set
-(`service.name`, `deployment.environment`, `http.route`,
-`http.method`, `http.status_code`, `rpc.*`, `messaging.*`) is
-deliberately conservative — every entry has been weighed against a
+The `span_metrics` connector is fed by the dedicated `traces/red`
+pipeline, which shares the `otlp` receiver with the main traces
+pipeline — so RED metrics are derived **before** any sampling step and
+see 100% of traffic even when operators tail-sample downstream.
+`traces/red` applies `filter/red_requests` first, so RED counts only
+request-like (`Server` / `Consumer`) spans; the main traces pipeline
+still ships every span to the destination unchanged
+([ADR-0022](../adr/adr-0022.md)). The default dimension set
+(`service.name`, `deployment.environment`, `http.route`, the HTTP
+method + status-code attributes in both stable and legacy semconv
+form, `rpc.*`, `messaging.*`) is deliberately conservative — every
+entry has been weighed against a
 [cardinality denylist](../reference/configuration.md#cardinality-denylist)
 that rejects per-request and per-user attributes at config-load
 time.

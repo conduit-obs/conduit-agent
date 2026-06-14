@@ -283,6 +283,25 @@ processors:
         statements:
           - 'set(severity_text, "INFO")'
           - 'set(severity_number, SEVERITY_NUMBER_INFO)'
+  # filter/red_requests scopes RED derivation to request-like spans.
+  # Without it the span_metrics connector would emit a request count
+  # for EVERY span — including client, internal, and producer spans
+  # that do not represent an inbound application request — inflating
+  # rate / error figures with work that isn't a serviced request.
+  #
+  # This processor runs ONLY in the dedicated traces/red pipeline
+  # (see service.pipelines below), so the main traces pipeline still
+  # ships every span to Honeycomb unchanged — RED derivation never
+  # reduces or mutates the original trace/event stream (ADR-0022,
+  # building on ADR-0006). A span is kept when its kind is Server or
+  # Consumer (the OTel notion of a request-receiving operation) and
+  # dropped otherwise. error_mode: ignore keeps a span if a condition
+  # ever errors rather than failing the whole batch.
+  filter/red_requests:
+    error_mode: ignore
+    traces:
+      span:
+        - 'kind != SPAN_KIND_SERVER and kind != SPAN_KIND_CONSUMER'
 
 exporters:
   otlphttp/honeycomb:
@@ -296,14 +315,17 @@ exporters:
   debug:
     verbosity: basic
 
-# span_metrics tees the traces pipeline into a derived RED metrics
-# stream (request count / error count / duration histogram) that lands
-# on the metrics pipeline before any sampling step. The dimension list
-# below is the documented Conduit default plus any user-supplied
-# additions in metrics.red.span_dimensions /
+# span_metrics derives a RED metrics stream (request count / error
+# count via the built-in status.code dimension / duration histogram)
+# from the dedicated traces/red pipeline and lands it on the metrics
+# pipeline before any sampling step. It only ever sees request-like
+# spans because traces/red applies filter/red_requests upstream of it.
+# The dimension list below is the documented Conduit default plus any
+# user-supplied additions in metrics.red.span_dimensions /
 # metrics.red.extra_resource_dimensions; ADR-0006 documents the
-# allowlist + denylist model and conduit doctor (M11) surfaces
-# CDT0501 / CDT0510 when those guardrails fire.
+# allowlist + denylist model, ADR-0022 the request-span scoping, and
+# conduit doctor (M11) surfaces CDT0501 / CDT0510 when those guardrails
+# fire.
 #
 # aggregation_cardinality_limit caps total tracked dimension
 # combinations; excess flows to a single overflow series tagged
@@ -317,7 +339,9 @@ connectors:
     dimensions:
       - name: deployment.environment
       - name: http.route
+      - name: http.request.method
       - name: http.method
+      - name: http.response.status_code
       - name: http.status_code
       - name: rpc.system
       - name: rpc.service
@@ -361,7 +385,22 @@ service:
       receivers:
         - otlp
       processors: [memory_limiter, resourcedetection, resource, batch]
-      exporters: [otlphttp/honeycomb, debug, span_metrics]
+      exporters: [otlphttp/honeycomb, debug]
+    # traces/red is the RED-derivation pipeline. It shares the otlp
+    # (and obi, when enabled) receiver with the main traces pipeline
+    # above — the receiver fans the same span stream out to both — so
+    # RED metrics are derived from 100% of spans BEFORE any downstream
+    # trace sampler (e.g. Refinery) sees them (ADR-0005). It runs the
+    # same resource-shaping processors as the main pipeline so the
+    # connector's resource_metrics_key_attributes resolve, plus
+    # filter/red_requests to keep only request-like spans, then feeds
+    # the span_metrics connector as its only exporter. The connector
+    # surfaces the derived metrics on the metrics pipeline below.
+    traces/red:
+      receivers:
+        - otlp
+      processors: [memory_limiter, resourcedetection, resource, filter/red_requests, batch]
+      exporters: [span_metrics]
     metrics:
       receivers:
         - otlp

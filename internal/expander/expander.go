@@ -93,20 +93,23 @@ type templateView struct {
 	LogProcessors    []string
 
 	// TraceExporters / MetricExporters / LogExporters list the exporter
-	// (and connector-as-exporter) IDs each pipeline writes to. In the
-	// RED-disabled / pre-M8 baseline this is just [ExporterName,
-	// "debug"]. With RED on, the traces pipeline appends "span_metrics"
-	// (the connector id) so spans tee through the connector and emerge
-	// as derived metrics on the metrics pipeline.
+	// (and connector-as-exporter) IDs each pipeline writes to. The main
+	// traces pipeline is always just [ExporterName, "debug"] — RED no
+	// longer tees the span_metrics connector off this pipeline. Instead
+	// the connector is the sole exporter of the dedicated traces/red
+	// pipeline (see REDTraceProcessors) so non-request spans can be
+	// filtered out of the derivation without affecting the spans this
+	// pipeline ships to Honeycomb.
 	TraceExporters  []string
 	MetricExporters []string
 	LogExporters    []string
 
 	// REDEnabled reports whether the span_metrics connector should be
 	// rendered into the output. When true the template emits the
-	// connector block and tees the traces pipeline through it; when
-	// false the connector block is omitted and the metrics pipeline
-	// looks the same as a M2-era OTLP-only render. Computed once in
+	// connector block, the filter/red_requests processor, and the
+	// dedicated traces/red derivation pipeline that feeds the
+	// connector; when false all three are omitted and the metrics
+	// pipeline looks the same as a M2-era OTLP-only render. Computed once in
 	// newView so the template logic stays branch-free.
 	REDEnabled bool
 
@@ -134,6 +137,16 @@ type templateView struct {
 	// Sourced from cfg.Metrics.RED.CardinalityLimit (defaulted to
 	// DefaultREDCardinalityLimit by config.applyDefaults).
 	REDCardinalityLimit int
+
+	// REDTraceProcessors is the processor list for the dedicated
+	// traces/red pipeline that feeds the span_metrics connector. It is
+	// the main traces processor list with filter/red_requests spliced
+	// in just before batch, so the connector only ever sees request-
+	// like (server / consumer) spans — non-request spans (client,
+	// internal, producer) are dropped from THIS pipeline before the
+	// connector counts them, while the main traces pipeline keeps every
+	// span for Honeycomb. Populated only when REDEnabled. See ADR-0022.
+	REDTraceProcessors []string
 
 	// PersistentQueueEnabled (M10.A) toggles the file_storage extension
 	// + the per-exporter sending_queue.storage block. When true the
@@ -451,12 +464,43 @@ func applyREDView(v *templateView, cfg *config.AgentConfig) {
 	v.REDCardinalityLimit = cardLimit
 
 	const connectorID = "span_metrics"
-	// Traces pipeline tees through the connector by listing it in its
-	// exporters. The data still flows to the real egress exporter
-	// alongside; the connector is a synthetic exporter that emits
-	// metrics on the receiver-side of the metrics pipeline.
-	v.TraceExporters = append(v.TraceExporters, connectorID)
+	// RED derives from a DEDICATED traces/red pipeline rather than
+	// teeing the connector off the main traces pipeline. The main
+	// traces pipeline keeps every span and ships it to Honeycomb /
+	// Refinery untouched (the preserve-original-telemetry principle).
+	// The traces/red pipeline shares the same receiver set — the OTLP
+	// (and OBI) receiver fans its span stream out to both pipelines —
+	// runs the same resource-shaping processors so the connector's
+	// resource_metrics_key_attributes are populated, then applies
+	// filter/red_requests to drop non-request spans before the
+	// connector counts them. The connector remains a receiver on the
+	// metrics pipeline, where the derived RED metrics surface. See
+	// ADR-0022 (request-span detection) and ADR-0005 (RED before
+	// sampling — the main pipeline's downstream Refinery hop never
+	// touches this derivation path).
+	v.REDTraceProcessors = insertBeforeBatch(v.TraceProcessors, "filter/red_requests")
 	v.MetricReceivers = append(v.MetricReceivers, connectorID)
+}
+
+// insertBeforeBatch returns procs with proc spliced in immediately
+// before the trailing "batch" processor (ADR-0016 keeps batch last).
+// When procs has no batch entry (shouldn't happen for a rendered
+// pipeline) proc is appended at the end so the processor is never
+// silently dropped.
+func insertBeforeBatch(procs []string, proc string) []string {
+	out := make([]string, 0, len(procs)+1)
+	inserted := false
+	for _, p := range procs {
+		if p == "batch" {
+			out = append(out, proc)
+			inserted = true
+		}
+		out = append(out, p)
+	}
+	if !inserted {
+		out = append(out, proc)
+	}
+	return out
 }
 
 // pipelineSignal is an internal enum used to compute per-pipeline

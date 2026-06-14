@@ -524,7 +524,8 @@ type Metrics struct {
 // chosen to be "the dimension set Datadog / Honeycomb / Grafana Cloud
 // users would expect on a service map without lifting a finger" —
 // service.name (built into the connector), deployment.environment,
-// http.{route,method,status_code}, rpc.{system,service,method},
+// http.route, the HTTP method + status-code attributes (both stable
+// and legacy semconv names), rpc.{system,service,method},
 // messaging.{system,operation}. Operators with multi-tenant or
 // regionalized workloads can add tenant-safe dimensions through
 // SpanDimensions / ExtraResourceDimensions; high-cardinality
@@ -589,13 +590,25 @@ const DefaultREDCardinalityLimit = 5000
 // connector adds on top of its built-in service.name / span.name /
 // span.kind / status.code dimensions. Every entry has been weighed
 // against the cardinality denylist: http.route is the templated form
-// (NOT raw http.target / http.url); http.method / http.status_code
-// are bounded; rpc.* and messaging.* fan out by service shape, not
-// by request.
+// (NOT raw http.target / http.url); the HTTP method / status-code
+// dimensions are bounded; rpc.* and messaging.* fan out by service
+// shape, not by request.
+//
+// Both the stable HTTP semantic-convention names (http.request.method,
+// http.response.status_code — semconv 1.23+) AND their pre-1.23 legacy
+// forms (http.method, http.status_code) are listed so RED dimensions
+// populate regardless of which semconv version the upstream SDK emits.
+// The spanmetricsconnector omits a configured dimension from a series
+// when the span lacks that attribute (no `default` is set), so a span
+// carrying only the stable names contributes the stable dimensions and
+// leaves the legacy ones absent, and vice versa — no empty-string
+// cardinality fan-out from listing both. See ADR-0022.
 var REDDefaultSpanDimensions = []string{
 	"deployment.environment",
 	"http.route",
+	"http.request.method",
 	"http.method",
+	"http.response.status_code",
 	"http.status_code",
 	"rpc.system",
 	"rpc.service",

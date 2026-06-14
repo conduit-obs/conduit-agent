@@ -162,12 +162,15 @@ func TestExpand_OTLPMode_RendersGenericExporter(t *testing.T) {
 		`x-honeycomb-team:`,
 		`tls:`,
 	})
-	// Traces tees through the span_metrics connector by default
-	// (M8 RED-from-spans); metrics + logs do not. Asserting both
-	// halves keeps the egress + connector contract together in
-	// one place.
-	if got := pipelineExporters(t, out, "traces"); !equalSet(got, []string{"otlphttp/otlp", "debug", "span_metrics"}) {
-		t.Errorf("traces pipeline exporters under otlp mode = %v; want [otlphttp/otlp debug span_metrics]", got)
+	// The main traces pipeline ships to the egress exporter + debug
+	// only — RED derives from the dedicated traces/red pipeline now
+	// (ADR-0022), so span_metrics is NOT an exporter here. metrics +
+	// logs go straight to egress.
+	if got := pipelineExporters(t, out, "traces"); !equalSet(got, []string{"otlphttp/otlp", "debug"}) {
+		t.Errorf("traces pipeline exporters under otlp mode = %v; want [otlphttp/otlp debug]", got)
+	}
+	if got := pipelineExporters(t, out, "traces/red"); !equalSet(got, []string{"span_metrics"}) {
+		t.Errorf("traces/red pipeline exporters under otlp mode = %v; want [span_metrics]", got)
 	}
 	for _, p := range []string{"metrics", "logs"} {
 		got := pipelineExporters(t, out, p)
@@ -1063,11 +1066,18 @@ func TestExpand_HoneycombViaRefinery_RoutesTracesOnly(t *testing.T) {
 	})
 
 	// Pipeline routing: traces -> refinery + debug; metrics -> honeycomb
-	// + debug; logs -> honeycomb + debug. RED is on by default so the
-	// span_metrics connector is also in the traces exporter list.
+	// + debug; logs -> honeycomb + debug. RED derives from the separate
+	// traces/red pipeline (ADR-0022), which feeds span_metrics and is
+	// unaffected by Refinery routing — its metrics exit via the metrics
+	// pipeline straight to Honeycomb, never through Refinery (ADR-0005).
 	traceExp := pipelineExporters(t, out, "traces")
 	if !contains(traceExp, "otlp/refinery") || contains(traceExp, "otlphttp/honeycomb") {
 		t.Errorf("traces pipeline exporters = %v; want otlp/refinery (no otlphttp/honeycomb)", traceExp)
+	}
+	// The RED derivation pipeline shares the receiver and feeds the
+	// connector; Refinery does not sit in this path.
+	if got := pipelineExporters(t, out, "traces/red"); !equalSet(got, []string{"span_metrics"}) {
+		t.Errorf("traces/red pipeline exporters = %v; want [span_metrics]", got)
 	}
 	for _, sig := range []string{"metrics", "logs"} {
 		exps := pipelineExporters(t, out, sig)
@@ -1154,10 +1164,15 @@ func TestExpand_RED_DefaultsOn(t *testing.T) {
 		// Documented histogram buckets (10ms..10s, nine boundaries).
 		`buckets: [10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]`,
 		// Default span dimensions — service.name is implicit
-		// upstream so we don't list it here.
+		// upstream so we don't list it here. Both stable (semconv
+		// 1.23+) and legacy HTTP method / status-code names ship so
+		// dimensions populate regardless of SDK semconv version
+		// (ADR-0022).
 		`- name: deployment.environment`,
 		`- name: http.route`,
+		`- name: http.request.method`,
 		`- name: http.method`,
+		`- name: http.response.status_code`,
 		`- name: http.status_code`,
 		`- name: rpc.system`,
 		`- name: messaging.system`,
@@ -1169,6 +1184,10 @@ func TestExpand_RED_DefaultsOn(t *testing.T) {
 		// Cardinality cap maps to upstream's aggregation_cardinality_limit.
 		`aggregation_cardinality_limit: 5000`,
 		`add_resource_attributes: true`,
+		// Request-span detection: the filter that scopes derivation to
+		// server / consumer spans (ADR-0022).
+		`filter/red_requests:`,
+		`kind != SPAN_KIND_SERVER and kind != SPAN_KIND_CONSUMER`,
 	})
 	// http.target / http.path are denylisted, never default.
 	mustNotContain(t, out, []string{
@@ -1176,10 +1195,24 @@ func TestExpand_RED_DefaultsOn(t *testing.T) {
 		`- name: http.path`,
 		`- name: trace_id`,
 	})
-	// Pipeline tee: traces exporters include span_metrics; metrics
-	// receivers include span_metrics; logs is unaffected.
-	if got := pipelineExporters(t, out, "traces"); !contains(got, "span_metrics") {
-		t.Errorf("traces pipeline must tee through span_metrics; got exporters %v", got)
+	// Pipeline wiring (ADR-0022): the main traces pipeline ships every
+	// span to Honeycomb and does NOT tee span_metrics; the dedicated
+	// traces/red pipeline filters to request-like spans and is the only
+	// span_metrics exporter; the metrics pipeline consumes the
+	// connector; logs is unaffected.
+	if got := pipelineExporters(t, out, "traces"); contains(got, "span_metrics") {
+		t.Errorf("main traces pipeline must NOT tee through span_metrics; got exporters %v", got)
+	}
+	if got := pipelineExporters(t, out, "traces/red"); !equalSet(got, []string{"span_metrics"}) {
+		t.Errorf("traces/red pipeline must export to span_metrics only; got exporters %v", got)
+	}
+	if got := pipelineProcessors(t, out, "traces/red"); !contains(got, "filter/red_requests") {
+		t.Errorf("traces/red pipeline must run filter/red_requests; got processors %v", got)
+	}
+	// The main traces pipeline must NOT run the request filter — it
+	// keeps every span for Honeycomb.
+	if got := pipelineProcessors(t, out, "traces"); contains(got, "filter/red_requests") {
+		t.Errorf("main traces pipeline must NOT run filter/red_requests; got processors %v", got)
 	}
 	if got := pipelineReceivers(t, out, "metrics"); !contains(got, "span_metrics") {
 		t.Errorf("metrics pipeline must consume span_metrics; got receivers %v", got)
@@ -1247,6 +1280,10 @@ func TestExpand_RED_DisabledOmitsConnector(t *testing.T) {
 		`span_metrics:`,
 		`aggregation_cardinality_limit:`,
 		`add_resource_attributes:`,
+		// No RED means no request-scoping filter and no derivation
+		// pipeline (ADR-0022).
+		`filter/red_requests:`,
+		`traces/red:`,
 	})
 	if got := pipelineExporters(t, out, "traces"); contains(got, "span_metrics") {
 		t.Errorf("traces pipeline must NOT tee through span_metrics when RED is disabled; got %v", got)
@@ -1481,6 +1518,11 @@ func TestExpand_OBI_ReplaceSpanMetricsConnector(t *testing.T) {
 		"\nconnectors:",
 		"span_metrics:",
 		"aggregation_cardinality_limit:",
+		// When OBI is the sole RED source there is no span_metrics
+		// derivation, so no request-scoping filter or red pipeline
+		// either (ADR-0022).
+		"filter/red_requests:",
+		"traces/red:",
 	})
 	if got := pipelineExporters(t, out, "traces"); contains(got, "span_metrics") {
 		t.Errorf("traces pipeline must NOT tee through span_metrics when OBI replaces it; got %v", got)

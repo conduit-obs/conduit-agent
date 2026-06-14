@@ -15,14 +15,17 @@ The split exists because the overrides escape hatch from [ADR-0012](../../docs/a
 
 ## RED metrics from spans (M8)
 
-`applyREDView` (in `expander.go`) renders the `span_metrics` connector when `cfg.Metrics.RED.REDEnabled()` is true. It is called *after* `pipelineProcessorIDs` so the connector tee sees the final receiver / processor / exporter shape:
+`applyREDView` (in `expander.go`) renders the `span_metrics` connector when `cfg.Metrics.RED.REDEnabled()` is true. It is called *after* `pipelineProcessorIDs` so the derivation pipeline sees the final receiver / processor shape:
 
-- Traces pipeline: appends `span_metrics` to `TraceExporters` so spans tee through the connector alongside the real egress exporter.
-- Metrics pipeline: appends `span_metrics` to `MetricReceivers` so the connector's emitted metrics flow through the standard processor chain to the same egress exporter.
+- Main traces pipeline: unchanged egress (`[<egress>, debug]`). It ships **every** span to the destination — RED no longer tees the connector here, so non-request spans are never dropped from the trace stream.
+- Dedicated `traces/red` pipeline (ADR-0022): shares the main traces receiver set, runs `REDTraceProcessors` (the main traces processors with `filter/red_requests` spliced in before `batch`), and exports to `span_metrics` only. The `filter/red_requests` processor keeps only `Server` / `Consumer` spans so the connector counts request-like spans only.
+- Metrics pipeline: appends `span_metrics` to `MetricReceivers` so the connector's emitted metrics flow through the standard processor chain to the egress exporter.
 - Logs pipeline: untouched.
 
 The connector ID is `span_metrics` (snake_case) — the canonical upstream name as of v0.151. The legacy `spanmetrics` alias still works at v0.151 but emits a startup warning, which we don't want to ship.
 
-Defaults — span dimensions, resource dimensions, histogram buckets, cardinality limit — live in `internal/config/types.go` (`REDDefault*`, `DefaultREDCardinalityLimit`) so the schema package owns the policy and the expander just renders. Adding a new default dimension is a single-file change there.
+Both `filter/red_requests` and the `traces/red` pipeline are gated on `REDEnabled`, so a RED-off config (or `obi.replace_span_metrics_connector: true`) renders neither.
+
+Defaults — span dimensions, resource dimensions, histogram buckets, cardinality limit — live in `internal/config/types.go` (`REDDefault*`, `DefaultREDCardinalityLimit`) so the schema package owns the policy and the expander just renders. The default span dimensions carry both stable (semconv 1.23+) and legacy HTTP method / status-code names. Adding a new default dimension is a single-file change there.
 
 The denylist (`REDDimensionDenylist`) is enforced at `Validate` time, not in the expander — the expander assumes a clean config. This keeps the rendering path a pure function of `*config.AgentConfig` with no validation branching.

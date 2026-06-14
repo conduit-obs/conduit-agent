@@ -226,12 +226,54 @@ metrics:
 
 #### Always-on default span dimensions
 
-`deployment.environment`, `http.route`, `http.method`,
-`http.status_code`, `rpc.system`, `rpc.service`, `rpc.method`,
-`messaging.system`, `messaging.operation`.
+`deployment.environment`, `http.route`, `http.request.method`,
+`http.method`, `http.response.status_code`, `http.status_code`,
+`rpc.system`, `rpc.service`, `rpc.method`, `messaging.system`,
+`messaging.operation`.
+
+Both the stable HTTP semantic-convention names
+(`http.request.method`, `http.response.status_code`; semconv 1.23+)
+and their pre-1.23 legacy forms (`http.method`, `http.status_code`)
+ship so dimensions populate regardless of the SDK version your apps
+emit — the connector simply omits whichever name a given span lacks.
 
 (The connector also adds its built-in `service.name`, `span.name`,
 `span.kind`, `status.code` regardless.)
+
+#### Request-span scoping
+
+RED metrics are derived only from **request-like** spans — those with
+`span.kind` of `Server` or `Consumer` (inbound serviced requests).
+The agent renders a dedicated `traces/red` pipeline that filters to
+those kinds before the `span_metrics` connector counts them, so
+`Client` / `Internal` / `Producer` spans don't inflate request rate or
+error counts. The main traces pipeline still ships **every** span to
+your destination unchanged — RED derivation never reduces the trace
+stream. See [ADR-0022](../adr/adr-0022.md).
+
+Because RED derives from its own `traces/red` pipeline, a trace sampler
+you add to the **main** traces pipeline (e.g. a `probabilistic_sampler`
+processor via [`overrides:`](#overrides-optional-map), or tail sampling in Refinery)
+reduces trace volume **without** distorting RED — request rate, error
+rate, and latency stay accurate at 100%. If you want RED itself
+sampled (you almost never do), you would have to override the
+`traces/red` pipeline's processor list explicitly.
+
+#### Error rate
+
+There is no separate error-count metric. Error rate is derived from the
+request counter sliced by the connector's built-in `status.code`
+dimension (`...calls` where `status.code = STATUS_CODE_ERROR`) and the
+HTTP `http.response.status_code` / `http.status_code` dimensions — the
+standard span-metrics RED error signal that the checked-in
+[dashboards](../../dashboards/) already query.
+
+#### Metric names
+
+The connector emits under its standard namespace: `traces.span.metrics.calls`
+(request counter) and `traces.span.metrics.duration` (latency histogram).
+These are the conventional span-metrics names the checked-in dashboards
+target; they are not renamed to an `app.request.*` scheme.
 
 #### Always-on default resource dimensions
 

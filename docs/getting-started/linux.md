@@ -183,8 +183,9 @@ with trace.get_tracer(__name__).start_as_current_span("hello"):
 
 Within ~10 seconds the span lands in Honeycomb's `checkout` dataset.
 RED metrics (request count, error count, duration histogram) are
-derived automatically — see [the architecture overview](../architecture/overview.md)
-for how the `span_metrics` connector tees off the traces pipeline.
+derived automatically from request-like spans — see [the architecture
+overview](../architecture/overview.md) for how the dedicated
+`traces/red` pipeline feeds the `span_metrics` connector.
 
 > **Optional: zero-code instrumentation for services without an OTel
 > SDK.** Re-run the installer with `--with-obi` and add `obi: {

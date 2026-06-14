@@ -355,7 +355,8 @@ budget at the destination. ADR-0006 documents the allowlist + denylist
 model.
 
 **How to fix**: pick a different dimension. The default set
-(service.name, deployment.environment, http.{route,method,status_code},
+(service.name, deployment.environment, http.route, the HTTP method +
+status-code attributes in both stable and legacy semconv form,
 rpc.{system,service,method}, messaging.{system,operation}) is what
 Datadog / Honeycomb / Grafana Cloud users get on a service map without
 lifting a finger. If you need tenant breakdowns for query-time
