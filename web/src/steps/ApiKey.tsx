@@ -42,37 +42,101 @@ function HoneycombApiKey({
   const validation = useMemo(() => validateIngestKey(state.ingestKey), [
     state.ingestKey,
   ]);
+  const team = state.honeycombTeam.trim();
+  const env = state.honeycombEnv.trim();
+  const apiKeysUrl = honeycombApiKeysUrl(team, env);
   return (
     <StepCard
       eyebrow="Step 4 of 8"
       title="Grab a Honeycomb ingest API key."
-      intro="The agent uses an ingest key — narrow scope, send-events permission only. (We'll ask for a separate Configuration key at the very end if you want to import a dashboard.)"
+      intro="The agent uses an ingest key — narrow scope, send-events permission only. (We'll reuse the team and environment you enter here for the optional board import at the end.)"
     >
+      <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
+        <h2 className="text-base font-semibold text-slate-900">
+          Which team and environment?
+        </h2>
+        <p className="text-sm text-slate-600 leading-relaxed">
+          Both come straight out of the Honeycomb URL you're already
+          looking at — e.g.{" "}
+          <code className="font-mono text-xs">
+            ui.honeycomb.io/<strong>my-team</strong>/environments/
+            <strong>prod</strong>/datasets
+          </code>
+          .
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block space-y-1">
+            <span className="text-sm font-semibold text-slate-900">
+              Team slug
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="my-team"
+              value={state.honeycombTeam}
+              onChange={(e) =>
+                dispatch({
+                  type: "SET_FIELD",
+                  field: "honeycombTeam",
+                  value: e.target.value,
+                })
+              }
+              className="w-full px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-sm font-mono focus:outline-2 focus:outline-accent"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-sm font-semibold text-slate-900">
+              Environment slug
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="prod"
+              value={state.honeycombEnv}
+              onChange={(e) =>
+                dispatch({
+                  type: "SET_FIELD",
+                  field: "honeycombEnv",
+                  value: e.target.value,
+                })
+              }
+              className="w-full px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-sm font-mono focus:outline-2 focus:outline-accent"
+            />
+          </label>
+        </div>
+      </div>
+
       <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <h2 className="text-base font-semibold text-slate-900">
           How to create one
         </h2>
         <ol className="space-y-3 text-sm text-slate-700 leading-relaxed list-decimal list-inside">
           <li>
-            Open{" "}
+            Open the{" "}
             <a
-              href="https://ui.honeycomb.io/teams"
+              href={apiKeysUrl}
               target="_blank"
               rel="noreferrer"
               className="text-accent font-medium hover:underline"
             >
-              ui.honeycomb.io
+              {team && env
+                ? `${team} / ${env} API keys page`
+                : "API keys page"}
             </a>
-            , pick the team and environment you want to send data to.
+            {team && env ? "." : " (fill in the team + environment above to get a direct link)."}
           </li>
           <li>
-            Click <code>Environment Settings → API Keys → Create API Key</code>.
+            Click <code>Create API Key</code>, name it{" "}
+            <code>conduit-ingest</code>.
           </li>
           <li>
-            Name it something like <code>conduit-ingest</code> and check
-            only <strong>Send Events</strong>. Leave the rest off.
+            Check only <strong>Send Events</strong>. Leave the rest off.
           </li>
-          <li>Click Create. Copy the key — it starts with <code>hcaik_</code>.</li>
+          <li>
+            Click Create. Copy the key — it starts with <code>hcaik_</code>.
+          </li>
         </ol>
       </div>
 
@@ -250,4 +314,13 @@ function validateIngestKey(
   }
   if (t.length < 20) return { kind: "warn", message: "That looks too short to be a real key." };
   return { kind: "ok" };
+}
+
+// honeycombApiKeysUrl deep-links to the API keys page for a given team +
+// environment when both are known, falling back to the team picker
+// otherwise. Honeycomb's URL pattern is stable:
+//   https://ui.honeycomb.io/<team>/environments/<env>/api_keys
+function honeycombApiKeysUrl(team: string, env: string): string {
+  if (!team || !env) return "https://ui.honeycomb.io/teams";
+  return `https://ui.honeycomb.io/${encodeURIComponent(team)}/environments/${encodeURIComponent(env)}/api_keys`;
 }

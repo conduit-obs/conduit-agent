@@ -23,6 +23,15 @@ export function BoardStep({
   const board = boardForPlatform(state.platform);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [errorDetail, setErrorDetail] = useState<ImportError | null>(null);
+  const team = state.honeycombTeam.trim();
+  const env = state.honeycombEnv.trim();
+  // Same deep-link the API key step uses, so the operator lands on the
+  // exact page they need with one click. Falls back to the team picker
+  // if they skipped the slugs earlier (rare; the apikey step prompts).
+  const apiKeysUrl =
+    team && env
+      ? `https://ui.honeycomb.io/${encodeURIComponent(team)}/environments/${encodeURIComponent(env)}/api_keys`
+      : "https://ui.honeycomb.io/teams";
 
   // If the user picked Generic OTLP back on step 3 there's nothing to
   // import — the boards we ship are Honeycomb-specific. Skip ahead.
@@ -96,8 +105,20 @@ export function BoardStep({
         </h2>
         <ol className="space-y-2 text-sm text-slate-700 list-decimal list-inside">
           <li>
-            Same <code>API Keys</code> page as before, on the team /
-            environment you sent data to.
+            Open the{" "}
+            <a
+              href={apiKeysUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent font-medium hover:underline"
+            >
+              {team && env
+                ? `${team} / ${env} API keys page`
+                : "API keys page"}
+            </a>
+            {team && env
+              ? " (same one you used for the ingest key)."
+              : "."}
           </li>
           <li>
             Click <code>Create API Key</code>, name it{" "}
@@ -124,24 +145,6 @@ export function BoardStep({
             dispatch({ type: "SET_FIELD", field: "configKey", value: v })
           }
         />
-        <div className="grid grid-cols-2 gap-3">
-          <Field
-            label="Team slug"
-            hint="from ui.honeycomb.io URL"
-            value={state.honeycombTeam}
-            onChange={(v) =>
-              dispatch({ type: "SET_FIELD", field: "honeycombTeam", value: v })
-            }
-          />
-          <Field
-            label="Environment slug"
-            hint="optional; used for the success URL"
-            value={state.honeycombEnv}
-            onChange={(v) =>
-              dispatch({ type: "SET_FIELD", field: "honeycombEnv", value: v })
-            }
-          />
-        </div>
         <button
           type="button"
           onClick={start}
