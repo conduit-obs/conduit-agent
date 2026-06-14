@@ -5,11 +5,17 @@
 #   - deb / rpm / archlinux packages via nfpms                (M3.B)
 #   - multi-arch (amd64 + arm64) OCI image at
 #     ghcr.io/conduit-obs/conduit-agent (per ADR-0019)        (M4.C)
-#   - Windows MSI via WiX (M6.C) — see deploy/windows/wix/conduit.wxs
+#   - GPG-signed checksums (signs:), cosign keyless image
+#     signatures (docker_signs:), CycloneDX SBOMs (sboms:)    (M12)
+#   - Windows MSI via WiX — built + Authenticode-signed in the
+#     release.yml `windows-msi` job, not goreleaser (v2 dropped msi:)
 #
-# Still pending:
-#   - M12 : Signing (cosign / Authenticode / GPG / Helm provenance) and
-#           image SBOM attestations — gated on OQ-5 in the decision log.
+# Signing inputs:
+#   - GPG (deb/rpm checksums): GPG_FINGERPRINT + imported private key,
+#     supplied by .github/workflows/release.yml. Skipped automatically on
+#     `--snapshot`, so release rehearsals run without key material.
+#   - cosign image signatures + SBOM attestation: keyless OIDC, no
+#     secrets (the workflow grants id-token: write).
 version: 2
 
 project_name: conduit
@@ -36,10 +42,12 @@ builds:
         goarch: arm64
     ldflags:
       - -s -w
-      # Wire to cmd/version once that subcommand stops being a stub (M3+).
-      # - -X github.com/conduit-obs/conduit-agent/cmd/version.version={{ .Version }}
-      # - -X github.com/conduit-obs/conduit-agent/cmd/version.commit={{ .Commit }}
-      # - -X github.com/conduit-obs/conduit-agent/cmd/version.buildDate={{ .Date }}
+      # Inject build metadata surfaced by `conduit version` /
+      # `conduit --version` (see cmd/version/version.go). The Makefile
+      # `build` target carries an equivalent block for local builds.
+      - -X github.com/conduit-obs/conduit-agent/cmd/version.version={{ .Version }}
+      - -X github.com/conduit-obs/conduit-agent/cmd/version.commit={{ .Commit }}
+      - -X github.com/conduit-obs/conduit-agent/cmd/version.date={{ .Date }}
 
 archives:
   - id: conduit
@@ -197,9 +205,26 @@ docker_manifests:
       - "ghcr.io/conduit-obs/conduit-agent:latest-amd64"
       - "ghcr.io/conduit-obs/conduit-agent:latest-arm64"
 
-# Windows MSI — DEFERRED until OQ-5 (signing infrastructure
-# ownership) lands. The MSI install path lives in the same package
-# layout used by deploy/windows/wix/conduit.wxs:
+# cosign keyless signatures for the published per-arch images. The
+# multi-arch manifest list a tag resolves to is a thin index over these
+# digests; signing each arch image means `cosign verify` succeeds whatever
+# platform an operator pulls. Keyless OIDC needs no key material — the
+# release workflow grants `id-token: write` and cosign mints a short-lived
+# Fulcio cert tied to the workflow identity, recording the signature in the
+# Rekor transparency log. Skipped on `--snapshot` (no images are pushed).
+# Verify per docs/release/runbook.md §6.
+docker_signs:
+  - id: cosign-images
+    cmd: cosign
+    artifacts: images
+    output: true
+    args:
+      - "sign"
+      - "--yes"
+      - "${artifact}@${digest}"
+
+# Windows MSI — built outside goreleaser. The MSI install path lives in
+# the package layout used by deploy/windows/wix/conduit.wxs:
 #
 #   conduit.exe under %PROGRAMFILES%\Conduit\
 #   default conduit.yaml + conduit.env under %PROGRAMDATA%\Conduit\
@@ -207,14 +232,11 @@ docker_manifests:
 #   config|noreplace semantic on conduit.yaml / conduit.env so MSI
 #     upgrades preserve operator edits
 #
-# Goreleaser v1.x had a top-level `msi:` builder. v2 restructured
-# packaging — when OQ-5 lands the MSI build comes back via the
-# .github/workflows/release.yml `windows-msi` job (currently
-# `if: false`), which builds with the WiX toolset directly on
-# windows-latest and signs with Authenticode. That job will also
-# upload the .msi to the release as an extra artifact, mirroring
-# what the v1 `msi:` block produced. EV cert procurement is gated
-# on OQ-5 alongside the cosign keys.
+# Goreleaser v2 dropped the v1 top-level `msi:` builder, so the MSI is
+# produced by the .github/workflows/release.yml `windows-msi` job: it
+# builds with the WiX toolset on windows-latest, Authenticode-signs the
+# binary + MSI when the signing cert secrets are present, runs an
+# install/uninstall smoke, and uploads the .msi to the release.
 
 # Ship install_linux.sh, the systemd unit, and the Windows install /
 # uninstall scripts alongside the release archives so curl-pipe-bash and
@@ -232,6 +254,55 @@ release:
 
 checksum:
   name_template: "checksums.txt"
+
+# GPG-sign the checksums file. checksums.txt enumerates every archive,
+# deb, rpm, and archlinux artifact by SHA-256, so a detached signature over
+# it transitively authenticates the whole file artifact set with one
+# signature operators can verify with the published public key
+# (`gpg --verify checksums.txt.sig checksums.txt`). The image set is signed
+# separately via docker_signs (cosign). Skipped on `--snapshot`, and the
+# {{ .Env.GPG_FINGERPRINT }} template is only evaluated at release time, so
+# rehearsals run without the key.
+signs:
+  - id: gpg
+    cmd: gpg
+    artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+# CycloneDX SBOMs via syft, one per release artifact. `archive` covers the
+# tar.gz / zip distributions; `package` covers the deb / rpm / archlinux
+# packages. Each SBOM is uploaded alongside its artifact so downstream
+# scanners (Grype, Trivy, Dependency-Track) can ingest the dependency
+# graph. Container-image SBOMs are attested directly to the registry by the
+# release workflow (cosign attest --type cyclonedx) rather than here, since
+# goreleaser's sboms: only operates on file artifacts. Requires syft on
+# PATH (installed in release.yml).
+sboms:
+  - id: archives
+    artifacts: archive
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "cyclonedx-json=$document"
+    documents:
+      - "{{ .ArtifactName }}.cdx.sbom.json"
+  - id: packages
+    artifacts: package
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "cyclonedx-json=$document"
+    documents:
+      - "{{ .ArtifactName }}.cdx.sbom.json"
 
 snapshot:
   version_template: "{{ .Tag }}-snapshot-{{ .ShortCommit }}"

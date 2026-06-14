@@ -62,29 +62,62 @@ jobs:
         run: go test ./...
 
   build:
-    name: Build
+    # Cross-compile every published GOOS/GOARCH on one cheap Linux runner so a
+    # Windows / darwin / arm break is caught in seconds, before the (slower,
+    # native) integration-smoke matrix below pays to spin up real runners.
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, obi: true }
+          - { goos: linux,   goarch: arm64, obi: true }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
           cache: true
-      - name: Vendor OBI (Linux-only)
+      - name: Vendor OBI (Linux targets only)
+        # Linux binaries link OBI unconditionally (ADR-0020); the bindings +
+        # go.work must exist before the cross-compile. darwin / windows targets
+        # exclude the OBI import via the //go:build linux tag.
+        if: matrix.obi
         run: make obi-vendor
-      - name: make build
-        run: make build
-      - name: Smoke (binary boots, subcommands surface the right errors)
+      - name: Compile
+        # A plain compile gate — version ldflags are exercised by the release
+        # build and `make build`, not needed to catch a broken cross-compile.
+        run: |
+          out="bin/conduit"
+          [ "${{ matrix.goos }}" = "windows" ] && out="bin/conduit.exe"
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "$out" ./
+      - name: Boot smoke (linux/amd64 only)
+        # The native target can actually run here: assert the binary boots,
+        # reports a version, and fails loud on a missing default config.
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
           set +e
-          # 'conduit run' with no --config falls back to /etc/conduit/conduit.yaml
-          # which doesn't exist on CI runners; it must fail loud, not silent.
           ./bin/conduit run; rc=$?
           if [ $rc -eq 0 ]; then echo "expected non-zero exit when default config is missing"; exit 1; fi
-          # 'conduit doctor' against a missing config should also fail (M11).
           ./bin/conduit doctor -c /nonexistent/conduit.yaml; rc=$?
           if [ $rc -eq 0 ]; then echo "expected non-zero exit from doctor against a missing config"; exit 1; fi
+          ./bin/conduit version
           ./bin/conduit --help
+
+  integration-smoke:
+    # The per-OS/arch artifact smoke (binary boots + real OTLP roundtrip) on
+    # native runners. Required for merge. The heavy install-lifecycle suite
+    # (tier=full) runs nightly and as a release gate, not on every PR.
+    name: Integration (smoke)
+    uses: ./.github/workflows/integration.yml
+    with:
+      tier: smoke
+    permissions:
+      contents: read
 
   goldens:
     name: Renderer goldens

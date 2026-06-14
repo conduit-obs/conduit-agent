@@ -1,9 +1,19 @@
 SHELL := /bin/bash
 
-# Conduit version surface. M1 has no ldflag injection (subcommands are stubs);
-# this variable exists so M2+ can plug it into Go's -X linker flags.
+# Conduit version surface. These feed Go's -X linker flags so `conduit
+# version` / `conduit --version` report real build metadata (see
+# cmd/version/version.go). VERSION defaults to the same dev string the code
+# defaults to, so an un-stamped build stays honest. Release builds override
+# VERSION (and pick up the tagged commit) via goreleaser, which carries its
+# own equivalent ldflags block in .goreleaser.yaml.
 VERSION ?= 0.0.0-dev
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+VERSION_PKG := github.com/conduit-obs/conduit-agent/cmd/version
+GO_LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
+              -X $(VERSION_PKG).commit=$(GIT_SHA) \
+              -X $(VERSION_PKG).date=$(BUILD_DATE)
 
 # Pinned OpenTelemetry Collector Builder (OCB) version. Drives the upstream
 # OTel collector + contrib MINOR that ships in Conduit (see docs/adr/adr-0014).
@@ -46,7 +56,8 @@ OCB_URL := https://github.com/open-telemetry/opentelemetry-collector-releases/re
         kind-up kind-image kind-load kind-deploy kind-test kind-down kind-smoketest \
         helm-lint helm-package helm-push helm-sign helm-publish \
         obi-vendor obi-clean obi-image obi-kind-load obi-kind-deploy \
-        update-goldens vulncheck
+        update-goldens vulncheck \
+        snapshot-packages smoke-host deb-install-test rpm-install-test arch-install-test
 
 help: ## Show available make targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -62,7 +73,7 @@ build: ## Build the conduit binary into ./bin/conduit. On Linux, requires `make 
 		echo "and do not need this step."; \
 		exit 1; \
 	fi
-	$(GO) build -o $(BIN) ./
+	$(GO) build -ldflags "$(GO_LDFLAGS)" -o $(BIN) ./
 
 test: ## Run all unit tests
 	$(GO) test ./...
@@ -111,11 +122,38 @@ build-ocb: $(OCB_BIN) $(BUILDER_CONFIG) ## Generate the embedded collector sourc
 	@$(GO) mod tidy
 	@echo "OCB output folded into $(COLLECTOR_DIR). Run 'make build' to verify."
 
-release-snapshot: ## Run goreleaser in snapshot mode (no publish, no signing; M1 only produces tarballs)
-	goreleaser release --snapshot --clean --skip=publish
+GORELEASER ?= goreleaser
+
+release-snapshot: ## Run goreleaser in snapshot mode (no publish; skips sbom/sign which need release-only tooling/keys)
+	$(GORELEASER) release --snapshot --clean --skip=publish,sbom,sign
+
+snapshot-packages: ## Build deb/rpm/archlinux packages (+archives) via a fast goreleaser snapshot — no docker/sbom/sign
+	$(GORELEASER) release --snapshot --clean --skip=publish,docker,sbom,sign
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) $(DIST_DIR) $(BUILD_DIR)
+
+# ----------------------------------------------------------------------------
+# Integration smoke targets (mirrors .github/workflows/integration.yml so the
+# same checks run locally). smoke-host is the per-host binary-boot + OTLP
+# roundtrip; the *-install-test targets exercise the package lifecycle inside
+# a throwaway container. All reuse scripts/ so the CI workflow and local make
+# share one implementation.
+# ----------------------------------------------------------------------------
+smoke-host: build ## Build, then run the binary-boot + real OTLP roundtrip smoke (scripts/smoke_otlp.sh)
+	bash scripts/smoke_otlp.sh $(BIN)
+
+deb-install-test: snapshot-packages ## Install the snapshot .deb in a Debian container, smoke it, uninstall
+	docker run --rm -v "$(PWD):/work" -w /work debian:12 \
+		bash scripts/package_install_test.sh "dist/conduit_*_linux_$(GOARCH).deb" apt
+
+rpm-install-test: snapshot-packages ## Install the snapshot .rpm in a Fedora container, smoke it, uninstall
+	docker run --rm -v "$(PWD):/work" -w /work fedora:40 \
+		bash scripts/package_install_test.sh "dist/conduit_*_linux_$(GOARCH).rpm" dnf
+
+arch-install-test: snapshot-packages ## Install the snapshot archlinux package in an Arch container, smoke it, uninstall
+	docker run --rm -v "$(PWD):/work" -w /work archlinux:latest \
+		bash scripts/package_install_test.sh "dist/conduit_*_linux_$(GOARCH).pkg.tar.zst" pacman
 
 # ----------------------------------------------------------------------------
 # kind smoke recipe (M5.C). Bring up a local Kubernetes cluster, build the

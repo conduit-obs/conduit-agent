@@ -1,0 +1,28 @@
+# Nightly integration run.
+#
+# Exercises the heavy install-lifecycle suite (package install, container
+# image, kind + helm, OBI on kind) that is too slow to gate every PR. It
+# calls the same reusable integration.yml the PR smoke and the release gate
+# use, just at tier=full, so nightly can never test a different thing than
+# release does. Also dispatchable on demand for pre-release rehearsals.
+
+name: Nightly
+
+on:
+  schedule:
+    # 07:00 UTC daily — after most contributors' workday ends, so a red
+    # nightly is waiting at the start of the next day rather than mid-PR.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-full:
+    name: Integration (full)
+    uses: ./.github/workflows/integration.yml
+    with:
+      tier: full
+    permissions:
+      contents: read

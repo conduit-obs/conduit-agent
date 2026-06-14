@@ -25,15 +25,10 @@ var allSubcommands = []string{
 }
 
 // stubSubcommands is the subset that still returns *stub.NotImplementedError
-// when invoked without arguments. Cross-reference with the milestone plan as
-// commands are wired up:
-//
-//   - version         stub until M3 (ldflag injection)
-//   - send-test-data  stub until M11
-var stubSubcommands = []string{
-	"version",
-	"send-test-data",
-}
+// when invoked without arguments. Every subcommand is now wired end-to-end,
+// so this is empty; it (and the assertion below) stays as the guard that
+// catches a subcommand regressing back to a stub.
+var stubSubcommands = []string{}
 
 func TestRootHelp(t *testing.T) {
 	root := cmd.NewRootCommand()
@@ -109,6 +104,46 @@ func TestSubcommandHelpExitsZero(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVersion_PrintsBuildMetadata verifies `conduit version` exits zero and
+// prints the (dev-default) version plus build metadata fields, and that
+// --short collapses to just the version string for scripting.
+func TestVersion_PrintsBuildMetadata(t *testing.T) {
+	t.Run("full", func(t *testing.T) {
+		root := cmd.NewRootCommand()
+		root.SetArgs([]string{"version"})
+
+		var stdout, stderr bytes.Buffer
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("version: %v\nstderr: %s", err, stderr.String())
+		}
+		for _, want := range []string{"conduit ", "commit:", "built:", "otel collector:"} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Errorf("version output missing %q; got:\n%s", want, stdout.String())
+			}
+		}
+	})
+
+	t.Run("short", func(t *testing.T) {
+		root := cmd.NewRootCommand()
+		root.SetArgs([]string{"version", "--short"})
+
+		var stdout, stderr bytes.Buffer
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("version --short: %v\nstderr: %s", err, stderr.String())
+		}
+		got := strings.TrimSpace(stdout.String())
+		if got == "" || strings.Contains(got, "commit:") {
+			t.Errorf("version --short should print only the version string; got %q", got)
+		}
+	})
 }
 
 // TestConfigValidate_HappyPath drives `conduit config --validate -c PATH` end

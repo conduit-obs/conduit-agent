@@ -1,0 +1,321 @@
+# Reusable integration-test workflow.
+#
+# Called by ci.yml (tier=smoke, every PR), nightly.yml (tier=full, cron),
+# and release.yml (tier=full, release gate). One file is the single source
+# of truth for "does a built Conduit artifact actually work" across every
+# platform we ship, so CI / nightly / release can never drift.
+#
+# Tiers:
+#   smoke  fast per-OS/arch artifact check: the binary boots and completes a
+#          real OTLP roundtrip (verified via the debug exporter). Runs the
+#          host-smoke matrix only.
+#   full   smoke PLUS the heavy install-lifecycle suite: native package
+#          install (deb/rpm/archlinux), the container image, kind + helm,
+#          and the OBI eBPF path on kind.
+#
+# All jobs reuse scripts/smoke_otlp.sh + scripts/package_install_test.sh so
+# the same checks run locally via `make smoke-host` / `make deb-install-test`.
+
+name: Integration
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: "smoke (host matrix only) or full (host + install lifecycle)"
+        type: string
+        default: smoke
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # host-smoke (smoke + full): build the binary and run the binary-boot + real
+  # OTLP roundtrip smoke on every OS/arch we publish. macOS / Windows skip OBI
+  # (the //go:build linux tag excludes the import there); Linux vendors OBI and
+  # builds via `make build` so the smoke exercises the OBI-linked binary we
+  # actually ship. The Windows job runs the same bash smoke through Git Bash,
+  # so there is no duplicate PowerShell payload to maintain.
+  # ---------------------------------------------------------------------------
+  host-smoke:
+    name: Host smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest      # linux/amd64
+          - os: ubuntu-24.04-arm   # linux/arm64
+          - os: macos-latest       # darwin/arm64
+          - os: macos-13           # darwin/amd64
+          - os: windows-latest     # windows/amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Vendor OBI (Linux only)
+        if: runner.os == 'Linux'
+        run: make obi-vendor
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: make build
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: go build -o bin/conduit ./
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: go build -o bin/conduit.exe ./
+
+      - name: Smoke (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/smoke_otlp.sh ./bin/conduit
+
+      - name: Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash scripts/smoke_otlp.sh ./bin/conduit.exe
+
+  # ---------------------------------------------------------------------------
+  # build-packages (full): produce the deb / rpm / archlinux artifacts once
+  # via a goreleaser snapshot, then hand them to the per-package jobs as an
+  # artifact so the package matrix doesn't each rebuild the toolchain.
+  # ---------------------------------------------------------------------------
+  build-packages:
+    name: Build Linux packages
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: "~> 2"
+      - name: Vendor OBI
+        run: make obi-vendor
+      - name: Build packages (snapshot)
+        run: make snapshot-packages
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  # package-deb (full): the full systemd lifecycle on a native runner — install
+  # the deb, seed the env file, start the service, push a real trace at the
+  # listening agent, confirm it logged it, then stop + remove. This is the only
+  # job that exercises the shipped systemd unit end to end.
+  package-deb:
+    name: Install lifecycle (deb + systemd)
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    needs: build-packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: dist
+      - name: Install the deb
+        run: |
+          deb=$(ls dist/conduit_*_linux_amd64.deb)
+          echo "installing $deb"
+          sudo apt-get install -y "./$deb"
+      - name: Seed env + start the service
+        run: |
+          sudo tee /etc/conduit/conduit.env >/dev/null <<'EOF'
+          HONEYCOMB_API_KEY=smoke-dummy-key
+          CONDUIT_DEPLOYMENT_ENVIRONMENT=ci
+          EOF
+          sudo systemctl start conduit
+          sleep 5
+          sudo systemctl is-active --quiet conduit || { echo "service not active"; sudo journalctl -u conduit --no-pager; exit 1; }
+      - name: Send a trace + verify the agent logged it
+        run: |
+          conduit send-test-data --target 127.0.0.1:4318 --duration 2s --rate 5 --profile red
+          ok=0
+          for _ in $(seq 1 20); do
+            if sudo journalctl -u conduit --no-pager | grep -qE "TracesExporter|conduit-send-test-data"; then ok=1; break; fi
+            sleep 0.5
+          done
+          [ "$ok" = 1 ] || { echo "agent never logged the trace"; sudo journalctl -u conduit --no-pager; exit 1; }
+          echo "deb systemd lifecycle: trace received"
+      - name: Stop + uninstall
+        run: |
+          sudo systemctl stop conduit
+          sudo apt-get remove -y conduit
+          [ ! -e /usr/bin/conduit ] || { echo "binary survived uninstall"; exit 1; }
+
+  # package-containers (full): rpm (Fedora) and archlinux (Arch) install
+  # lifecycle. Run inside throwaway containers via the same docker invocation
+  # `make {rpm,arch}-install-test` uses, so the script is the single source of
+  # truth. No systemd here (containers); the deb job covers the systemd path.
+  package-containers:
+    name: Install lifecycle (${{ matrix.name }})
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    needs: build-packages
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rpm
+            image: fedora:40
+            glob: "dist/conduit_*_linux_amd64.rpm"
+            mgr: dnf
+          - name: archlinux
+            image: archlinux:latest
+            glob: "dist/conduit_*_linux_amd64.pkg.tar.zst"
+            mgr: pacman
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: dist
+      - name: Install + smoke + uninstall in ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work ${{ matrix.image }} \
+            bash scripts/package_install_test.sh "${{ matrix.glob }}" ${{ matrix.mgr }}
+
+  # ---------------------------------------------------------------------------
+  # docker-image (full): build the container image from the source Dockerfile
+  # for both arches (arm64 under QEMU) and run a real OTLP roundtrip against
+  # each. The image is both server and sender — a throwaway sender container on
+  # the host network drives the listening one — so no host conduit build is
+  # needed and we exercise the exact image we ship.
+  # ---------------------------------------------------------------------------
+  docker-image:
+    name: Docker image smoke (${{ matrix.arch }})
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Vendor OBI
+        # The source Dockerfile builds conduit on Linux, which links OBI; the
+        # bindings + go.work must be in the build context (COPY . .).
+        run: make obi-vendor
+      - name: Build the image
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --load \
+            -t conduit:itest -f deploy/docker/Dockerfile .
+      - name: Run + smoke
+        run: |
+          docker run -d --name conduit-itest --platform linux/${{ matrix.arch }} \
+            -p 4318:4318 \
+            -e HONEYCOMB_API_KEY=smoke-dummy-key \
+            -e CONDUIT_DEPLOYMENT_ENVIRONMENT=ci \
+            conduit:itest
+          # Wait for the OTLP/HTTP listener.
+          ready=0
+          for _ in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/4318) 2>/dev/null; then exec 3>&- 3<&-; ready=1; break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' conduit-itest)" != "true" ]; then break; fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "image OTLP endpoint never opened"; docker logs conduit-itest; exit 1; }
+          # Drive a trace from a throwaway sender container on the host network.
+          docker run --rm --network host --platform linux/${{ matrix.arch }} \
+            conduit:itest send-test-data --target 127.0.0.1:4318 --duration 2s --rate 5 --profile red
+          ok=0
+          for _ in $(seq 1 20); do
+            if docker logs conduit-itest 2>&1 | grep -qE "TracesExporter|conduit-send-test-data"; then ok=1; break; fi
+            sleep 0.5
+          done
+          [ "$ok" = 1 ] || { echo "image never logged the trace"; docker logs conduit-itest; exit 1; }
+          echo "docker image smoke (${{ matrix.arch }}): ok"
+      - name: Cleanup
+        if: always()
+        run: docker rm -f conduit-itest 2>/dev/null || true
+
+  # ---------------------------------------------------------------------------
+  # kind-helm (full): the full Kubernetes path — build the image, load it into
+  # a kind cluster, helm-install the chart, push a trace through the Service,
+  # and verify the DaemonSet logged it. Reuses `make kind-smoketest` verbatim.
+  # ---------------------------------------------------------------------------
+  kind-helm:
+    name: kind + helm smoke
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: Vendor OBI
+        # kind-image builds the source Dockerfile (links OBI on Linux).
+        run: make obi-vendor
+      - name: kind smoke (up → image → load → deploy → trace)
+        run: make kind-smoketest
+      - name: Tear down
+        if: always()
+        run: make kind-down || true
+
+  # ---------------------------------------------------------------------------
+  # obi-kind (full, Linux): the eBPF path. Build the OBI-linked image, load it
+  # into kind, deploy with obi.enabled=true, and run the same trace smoke
+  # against the OBI-deployed DaemonSet (same release name as kind-helm).
+  # ---------------------------------------------------------------------------
+  obi-kind:
+    name: OBI on kind smoke
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: OBI on kind (vendor → image → load → deploy → trace)
+        run: |
+          make kind-up
+          make obi-vendor
+          make obi-image
+          make obi-kind-load
+          make obi-kind-deploy
+          make kind-test
+      - name: Tear down
+        if: always()
+        run: make kind-down || true

@@ -69,9 +69,14 @@ go test ./internal/doctor -run TestDocsAnchor
 # 4. Schema reference + README parity (M13: when the generator lands).
 # make check-readme
 
-# 5. Snapshot release (no publish, no signing) to confirm goreleaser
-#    config still validates against the current goreleaser version.
-goreleaser release --snapshot --clean --skip=publish
+# 5. Snapshot release (no publish; skips sbom/sign which need release-only
+#    tooling/keys) to confirm goreleaser config still validates.
+make release-snapshot
+
+# 6. (Optional) Run the per-platform smokes locally before tagging:
+make smoke-host          # binary boots + real OTLP roundtrip on this host
+make deb-install-test    # deb install lifecycle in a Debian container
+make rpm-install-test    # rpm install lifecycle in a Fedora container
 ```
 
 If any step fails, **stop** and fix the cause on `main`. Do not tag a broken commit "and fix forward".
@@ -82,15 +87,21 @@ If any step fails, **stop** and fix the cause on `main`. Do not tag a broken com
 
 | Gate | How to read it | Required for release |
 |---|---|---|
-| Latest `main` CI run | green | yes |
-| Latest nightly AWS smoke | green or known cause | yes |
-| `helm-publish` workflow on the test tag | succeeded with cosign signature | yes |
+| Latest `main` CI run (incl. integration smoke) | green | yes |
+| Latest nightly integration (`tier=full`) | green or known cause | yes |
 | `govulncheck` | no `HIGH` / `CRITICAL` | yes |
 | Image scan | no `HIGH` / `CRITICAL` | yes |
-| Output-mode matrix | green (Honeycomb / Refinery / gateway) | yes |
-| Windows MSI smoke | green on the most recent `windows-latest` runner | yes (M12 follow-up) |
+| Windows MSI build + smoke | runs in the release `windows-msi` job | yes |
 
-If a gate is yellow rather than green, document the reason in the maintainer issue and either fix or explicitly defer with a sign-off note.
+These gates are now enforced automatically: the release workflow runs a
+`preflight` job (tests, vulncheck, goldens, doctor anchors, helm lint) and a
+full per-platform `integration` gate **before** goreleaser publishes
+anything (see [`docs/release/ci-cd.md`](ci-cd.md)). The nightly run exercises
+the same `integration.yml` at `tier=full` so a red nightly is a release
+blocker.
+
+If a gate is yellow rather than green, document the reason in the maintainer
+issue and either fix or explicitly defer with a sign-off note.
 
 ---
 
@@ -104,14 +115,13 @@ git checkout main
 git pull --ff-only
 git log --oneline -5
 
-# Tag with a v-prefix per Go module conventions.
-# Once OQ-5 (signing infra) lands the `-s` flag is required. Until
-# then the workflow accepts annotated tags and emits a warning.
-git tag -a -m "v0.x.y" v0.x.y       # annotated; promote to `-s` post-OQ-5.
+# Tag with a v-prefix per Go module conventions. Prefer a GPG-signed
+# tag (`-s`); the workflow accepts annotated tags but emits a warning.
+git tag -s -m "v0.x.y" v0.x.y       # signed; falls back to `-a` if no key.
 git push origin v0.x.y
 ```
 
-The signed tag is the audit log; CI verifies the signature against the maintainer's GPG key as a sanity check before the publish job runs. The verification is currently a warning; it becomes a hard gate when OQ-5 lands.
+The signed tag is the audit log; CI verifies the signature as a sanity check before the publish job runs. The verification currently emits a warning rather than failing, so unsigned annotated tags still release — promote it to a hard gate once every maintainer has a published key.
 
 ---
 
@@ -121,13 +131,23 @@ The release workflow at `.github/workflows/release.yml` runs `goreleaser release
 
 | Artifact | Signed by | Verification |
 |---|---|---|
-| Linux deb / rpm / apk / archlinux / tar.gz | maintainer GPG key + cosign keyless | `cosign verify-blob` and `dpkg-sig --verify` (deb), `rpm --checksig` (rpm) |
-| macOS zip | cosign keyless | `cosign verify-blob` |
-| Windows MSI | Authenticode (DigiCert / sigstore — M12 follow-up) | `signtool verify /pa /v conduit.msi` |
+| Linux deb / rpm / archlinux / tar.gz | GPG-signed `checksums.txt` | `gpg --verify checksums.txt.sig checksums.txt` then `sha256sum -c` |
+| macOS tar.gz | GPG-signed `checksums.txt` | as above |
+| Windows MSI | Authenticode (`WINDOWS_CERT_*` secrets) | `signtool verify /pa /v conduit_<ver>_windows_amd64.msi` |
 | Multi-arch container image at `ghcr.io/conduit-obs/conduit-agent:vX.Y.Z` | cosign keyless | `cosign verify ghcr.io/...` |
 | Helm chart at `oci://ghcr.io/conduit-obs/charts/conduit-agent:X.Y.Z` | cosign keyless | `cosign verify-blob` |
-| Source tarball | maintainer GPG key | `gpg --verify` |
-| SBOM (CycloneDX) | cosign attestation | `cosign verify-attestation` |
+| File SBOMs (CycloneDX, per archive/package) | uploaded beside each artifact | ingest into Grype / Trivy / Dependency-Track |
+| Image SBOM (CycloneDX) | cosign attestation | `cosign verify-attestation --type cyclonedx ghcr.io/...` |
+
+The `verify` job runs automatically after `publish` and re-checks the most
+critical of these (image pull + `conduit version`, image signature, image
+SBOM attestation, chart pull/render, published-deb install) so a broken
+artifact fails the workflow loudly before §6.
+
+The GPG release-signing public key lives at
+[`docs/release/signing-key.asc`](signing-key.asc) (fingerprint
+`3B2A5C2A139F13290FA468BC6D4C5ADC84C5FEAA`); operators import it once with
+`gpg --import` before `gpg --verify checksums.txt.sig checksums.txt`.
 
 Open `gh run watch` against the tag's workflow and stay until it finishes. **If a step fails, the release stays in "draft" state**; fix the failure (or revert the tag if the cause is in the source) and re-run only the failed step.
 
@@ -143,7 +163,7 @@ History note: the auto-publish step was added 2026-05-04 after `v0.0.3` shipped 
 
 ## 6 — Post-release smoke
 
-The release is already public at this point (auto-publish, see §5). These smokes confirm what shipped works and let you `gh release delete` if something is broken before announcing:
+The `verify` job already ran these checks automatically (see §5) — the release only reaches a clean `notify` if they passed. The commands below are the same checks for ad-hoc re-verification or deeper investigation, and let you `gh release delete` if something is broken before announcing:
 
 ```sh
 # 1. Pull the published image and run it.

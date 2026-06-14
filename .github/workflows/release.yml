@@ -1,15 +1,20 @@
-# Release workflow (M12.E). Triggered by signed `vX.Y.Z` tags;
-# produces signed artifacts for every supported platform via
-# goreleaser, plus the cosign attestations the release runbook
-# (docs/release/runbook.md) verifies.
+# Release workflow. Triggered by `vX.Y.Z` tags; produces signed artifacts
+# for every supported platform and verifies them after publish.
 #
-# Status: scaffolded for M12. The signing infrastructure depends on
-# OQ-5 (open question — which signing service backs the maintainer
-# GPG + Authenticode setup), so the cosign / Authenticode steps are
-# guarded by `if: env.SIGNING_READY == 'true'` until OQ-5 lands.
-# That keeps the workflow runnable end-to-end on a release rehearsal
-# (every step except signing succeeds) so the rest of the pipeline
-# is exercised long before the first signed release.
+# Pipeline (see docs/release/ci-cd.md for the diagram):
+#   preflight ─▶ integration (tier=full) ─▶ goreleaser ─┬─▶ helm
+#                                                        ├─▶ windows-msi
+#   (goreleaser, helm, windows-msi) ─▶ publish ─▶ verify ─▶ notify
+#
+# Signing:
+#   - GPG: checksums.txt is detached-signed by goreleaser's signs: block
+#     (deb/rpm integrity chains to it). The private key is imported from the
+#     GPG_PRIVATE_KEY secret; absent it, the sign step is skipped so a fork
+#     without keys can still rehearse the rest of the pipeline.
+#   - cosign keyless (OIDC, no secrets): container image signatures
+#     (goreleaser docker_signs) + image SBOM attestation + the helm chart.
+#   - Authenticode: the inner conduit.exe and the .msi, signed with the
+#     WINDOWS_CERT_BASE64 / WINDOWS_CERT_PASSWORD secrets when present.
 
 name: Release
 
@@ -24,25 +29,64 @@ permissions:
   id-token: write   # cosign keyless OIDC
 
 jobs:
+  # Re-run the same gates CI enforces, but on the exact tagged commit — the
+  # tag could be ahead of or behind the last green main run.
+  preflight:
+    name: Pre-flight checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify the tag is signed
+        # Maintainer-signed tags are the release audit log (runbook §4). A
+        # warning today; promote to a hard failure once every maintainer has
+        # a published signing key.
+        run: |
+          if ! git verify-tag "${GITHUB_REF_NAME}" 2>/dev/null; then
+            echo "::warning::tag ${GITHUB_REF_NAME} is not GPG-signed; runbook §4 will require signed tags once every maintainer has a key"
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+      - name: Vendor OBI
+        run: make obi-vendor
+      - name: Tests + vulncheck
+        run: |
+          go test ./...
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: Renderer goldens are current
+        run: go test ./internal/expander -run TestExpand_Goldens -count=1
+      - name: Doctor docs anchors
+        run: go test ./internal/doctor -run TestDocsAnchor -count=1
+      - name: Helm chart lint
+        run: make helm-lint
+
+  # Full per-platform integration gate (host smoke + package/image/kind/OBI
+  # install lifecycle). Same reusable workflow CI and nightly call.
+  integration:
+    name: Integration gate
+    needs: preflight
+    uses: ./.github/workflows/integration.yml
+    with:
+      tier: full
+    permissions:
+      contents: read
+
   goreleaser:
     name: Goreleaser
     runs-on: ubuntu-latest
+    needs: [preflight, integration]
     steps:
       - name: Check out at the tag
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify the tag is signed
-        # Maintainer-signed tags are part of the audit log. The
-        # release runbook §4 documents the policy; this step is the
-        # CI enforcement. Currently emits a warning rather than
-        # failing — the hard enforcement comes back when OQ-5
-        # (signing infrastructure ownership) lands, alongside the
-        # cosign / Authenticode gates.
-        run: |
-          if ! git verify-tag "${GITHUB_REF_NAME}" 2>/dev/null; then
-            echo "::warning::tag ${GITHUB_REF_NAME} is not GPG-signed; release runbook §4 will require signed tags once OQ-5 lands"
-          fi
 
       - uses: actions/setup-go@v5
         with:
@@ -50,30 +94,9 @@ jobs:
           cache: true
 
       - name: Vendor OBI
-        # ADR-0020 sub-decision 1: every Linux conduit binary links
-        # OBI in. Goreleaser's Linux build paths reach
-        # internal/collector/components_obi_linux.go, which imports
-        # go.opentelemetry.io/obi/collector. Upstream proxy v0.8.0
-        # ships no eBPF Go bindings (ADR-0020 "Open question: build
-        # pipeline"), so we clone OBI source, run upstream's
-        # `make docker-generate` here, and write a gitignored go.work
-        # adding ./third_party/obi to the workspace. Goreleaser's
-        # subsequent build step picks up the workspace and links the
-        # generated bindings into the Linux artifacts. macOS / Windows
-        # artifacts skip the OBI import via the //go:build tag and
-        # are unaffected. Workspace mode (vs. `go mod edit -replace`)
-        # is what lets the tagged tree stay clean — goreleaser's
-        # dirty-state gate killed the v0.0.4 release before this fix.
+        # ADR-0020 sub-decision 1: every Linux binary links OBI in. The
+        # bindings + gitignored go.work must exist before goreleaser builds.
         run: make obi-vendor
-
-      - name: Pre-flight (test + vulncheck on the exact tagged commit)
-        # Don't trust that the latest `main` CI run still applies —
-        # the tag could be ahead of or behind it. Re-run the same
-        # gates here so the release reflects the source it claims to.
-        run: |
-          go test ./...
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
 
       - name: Set up cosign
         uses: sigstore/cosign-installer@v3
@@ -82,6 +105,15 @@ jobs:
 
       - name: Set up syft (SBOM)
         uses: anchore/sbom-action/download-syft@v0
+
+      - name: Import GPG signing key
+        # Gated: a fork without the secret skips this and goreleaser's signs:
+        # block is skipped below, so the rest of the release still rehearses.
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Set up qemu (cross-arch container builds)
         uses: docker/setup-qemu-action@v3
@@ -96,28 +128,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute goreleaser flags
+        id: flags
+        # Skip GPG signing when no key is available so the workflow doesn't
+        # hard-fail on a keyless fork. cosign keyless image signing needs no
+        # secret and is unaffected.
+        run: |
+          if [ -z "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+            echo "extra=--skip=sign" >> "$GITHUB_OUTPUT"
+            echo "::warning::GPG_PRIVATE_KEY not set; skipping GPG signing of checksums"
+          else
+            echo "extra=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run goreleaser
-        # The actual artifact set + signing is configured in
-        # .goreleaser.yaml. This step just orchestrates.
-        # The .goreleaser.yaml uses `version: 2` schema, which
-        # requires the goreleaser v2.x binary — v1.x errors with
-        # "only configurations files on version: 1 are supported".
-        # MSI is currently a non-deliverable: goreleaser v2 dropped
-        # the top-level `msi:` builder, and the windows-msi job
-        # below is `if: false` until OQ-5 (signing infrastructure
-        # ownership) lands. When OQ-5 is resolved, the windows-msi
-        # job comes back on and produces the MSI directly with WiX
-        # on windows-latest.
+        # .goreleaser.yaml (version: 2) configures the artifact set + signing.
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> 2"
-          args: release --clean
+          args: release --clean ${{ steps.flags.outputs.extra }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The snapshot path skips signing if the maintainer GPG
-          # key isn't present in secrets — useful for release
-          # rehearsals on a forked repo without real keys.
           GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
+
+      - name: Attest container image SBOM (cosign + syft)
+        # File-artifact SBOMs (archives/packages) are produced by goreleaser's
+        # sboms: block. The image SBOM is attested here, keyless, against the
+        # multi-arch tag goreleaser just pushed. Verified in the verify job
+        # and per runbook §6.
+        run: |
+          img="ghcr.io/conduit-obs/conduit-agent:${GITHUB_REF_NAME}"
+          syft "$img" -o cyclonedx-json=image.cdx.sbom.json
+          cosign attest --yes --type cyclonedx --predicate image.cdx.sbom.json "$img"
 
   helm:
     name: Helm chart publish
@@ -137,17 +179,11 @@ jobs:
       - name: Log in to ghcr.io
         run: helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
       - name: Sync chart version + appVersion with the tag
-        # `version:` is the operator-facing chart SemVer and is committed
-        # in lock-step with the tag — drift fails the publish on purpose.
-        # `appVersion:` is the agent binary version the chart points at
-        # via .Chart.AppVersion and is committed as "0.0.0-dev" so local
-        # `helm template` runs of an unreleased chart don't pretend to
-        # ship a real binary tag. At publish time we sed it to the tag
-        # so the OCI-published Chart.yaml's appVersion matches the
-        # ghcr.io/conduit-obs/conduit-agent:<tag> image goreleaser just
-        # pushed. Without this, the rendered image.tag fell back to
-        # "0.0.0-dev" and pods hit ImagePullBackOff (caught after v0.0.4
-        # in a live deploy).
+        # `version:` is the operator-facing chart SemVer, committed in lock-step
+        # with the tag — drift fails the publish. `appVersion:` is committed as
+        # "0.0.0-dev" so local `helm template` of an unreleased chart doesn't
+        # claim a real image tag; at publish we sed it to the tag so the
+        # OCI-published Chart.yaml points at the image goreleaser just pushed.
         run: |
           tag="${GITHUB_REF_NAME#v}"
           chart=$(awk '/^version:/ {print $2; exit}' deploy/helm/conduit-agent/Chart.yaml)
@@ -163,10 +199,9 @@ jobs:
         run: make helm-publish
 
   windows-msi:
-    name: Windows MSI build (smoke)
+    name: Windows MSI build + sign
     runs-on: windows-latest
     needs: goreleaser
-    if: ${{ false }}   # Enabled when MSI signing infra (OQ-5) lands.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,37 +209,98 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-      - name: Build the conduit binary
-        run: go build -o bin/conduit.exe ./
-      - name: Build the MSI via WiX
-        # WiX is preinstalled on windows-latest. Builds against
-        # deploy/windows/wix/conduit.wxs and stages the binary +
-        # default config under the WiX source tree.
+      - name: Compute versions
+        id: ver
+        shell: bash
         run: |
-          $env:PATH += ";${env:WIX}\bin"
-          candle deploy/windows/wix/conduit.wxs -out conduit.wixobj
-          light conduit.wixobj -out conduit.msi
+          ver="${GITHUB_REF_NAME#v}"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          # MSI ProductVersion must be numeric x.y.z — drop any -prerelease.
+          echo "msiver=${ver%%-*}" >> "$GITHUB_OUTPUT"
+      - name: Build the conduit binary
+        # Windows excludes the OBI import via the //go:build linux tag, so no
+        # OBI vendoring is needed here.
+        run: go build -o staging/conduit.exe ./
+      - name: Stage default config + env
+        shell: bash
+        run: |
+          cp deploy/windows/conduit.yaml.default staging/conduit.yaml.default
+          cp deploy/windows/conduit.env.default staging/conduit.env.default
+      - name: Locate signtool
+        id: signtool
+        shell: pwsh
+        run: |
+          $st = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1
+          if ($st) { "path=$($st.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
+          else { "path=signtool" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
+      - name: Authenticode-sign conduit.exe
+        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          # Strip any whitespace/newlines so the secret works whether it was
+          # created with `base64` (wraps at 76 cols) or `base64 | tr -d '\n'`.
+          $b64 = $env:WINDOWS_CERT_BASE64 -replace '\s', ''
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($b64))
+          & "${{ steps.signtool.outputs.path }}" sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD `
+            /tr http://timestamp.digicert.com /td sha256 /fd sha256 staging\conduit.exe
+      - name: Build the MSI via WiX
+        # WiX 3.x (candle/light). The .wxs uses the util extension for the
+        # service-recovery config, hence -ext WixUtilExtension on light.
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+          $wixBin = (Get-ChildItem "C:\Program Files (x86)\WiX Toolset*\bin\candle.exe" |
+                     Sort-Object FullName -Descending | Select-Object -First 1).DirectoryName
+          $env:PATH = "$wixBin;$env:PATH"
+          candle deploy/windows/wix/conduit.wxs -out conduit.wixobj `
+            -dbinary=staging\conduit.exe `
+            -dyaml_default=staging\conduit.yaml.default `
+            -denv_default=staging\conduit.env.default `
+            -dVersion=${{ steps.ver.outputs.msiver }}
+          light conduit.wixobj -ext WixUtilExtension -out conduit.msi
+      - name: Authenticode-sign the MSI
+        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          & "${{ steps.signtool.outputs.path }}" sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD `
+            /tr http://timestamp.digicert.com /td sha256 /fd sha256 conduit.msi
+          & "${{ steps.signtool.outputs.path }}" verify /pa /v conduit.msi
       - name: Smoke (install / verify service / uninstall)
+        shell: pwsh
         run: |
           msiexec.exe /i .\conduit.msi /qn /l*v install.log
           Start-Sleep -Seconds 5
-          Get-Service conduit
+          # The packaging contract is that the MSI registers the "conduit"
+          # service. Whether it stays Running depends on runtime config/env
+          # (HONEYCOMB_API_KEY), which the host/OTLP smokes cover separately —
+          # so assert registration here and surface the state for the log.
+          $svc = Get-Service conduit -ErrorAction Stop
+          Write-Host "conduit service status after install: $($svc.Status)"
           msiexec.exe /x .\conduit.msi /qn /l*v uninstall.log
+          if (Get-Service conduit -ErrorAction SilentlyContinue) { throw "conduit service still registered after uninstall" }
+      - name: Rename + upload the MSI to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          msi="conduit_${{ steps.ver.outputs.ver }}_windows_amd64.msi"
+          mv conduit.msi "$msi"
+          gh release upload "${GITHUB_REF_NAME}" "$msi" --clobber
 
   publish:
-    # Promotes the goreleaser-produced draft to a published release once
-    # both binaries (goreleaser) and the Helm chart (helm) have shipped
-    # cleanly. Runbook §5 promises "everything is automated"; this is the
-    # last piece — without it, install_linux.sh's `releases/latest`
-    # resolver lags behind the tag and operators install stale debs from
-    # the previous release (the v0.0.3 incident, 2026-05-04).
-    #
-    # Stable tags (vX.Y.Z) become the new "Latest". SemVer pre-release
-    # tags (vX.Y.Z-rc.1, -beta, -alpha…) are un-drafted as prereleases
-    # without bumping latest, mirroring goreleaser's `prerelease: auto`.
+    # Promote the goreleaser draft to published once binaries, helm chart, and
+    # MSI have all shipped. Stable tags become "Latest"; SemVer pre-releases
+    # are un-drafted as prereleases without bumping latest.
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [goreleaser, helm]
+    needs: [goreleaser, helm, windows-msi]
     permissions:
       contents: write
     steps:
@@ -230,19 +326,68 @@ jobs:
             echo "::notice::release ${GITHUB_REF_NAME} promoted to Prerelease"
           fi
 
+  verify:
+    # Post-publish gate: prove the published artifacts actually work and are
+    # signed before anyone is told the release is good (automates runbook §6).
+    name: Post-publish verify
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Set up cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.0
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+      - name: Pull the image and run conduit version
+        run: |
+          img="ghcr.io/conduit-obs/conduit-agent:${GITHUB_REF_NAME}"
+          docker pull "$img"
+          docker run --rm "$img" version
+      - name: Verify the image signature + SBOM attestation
+        run: |
+          img="ghcr.io/conduit-obs/conduit-agent:${GITHUB_REF_NAME}"
+          cosign verify "$img" \
+            --certificate-identity-regexp 'https://github.com/conduit-obs/.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          cosign verify-attestation --type cyclonedx "$img" \
+            --certificate-identity-regexp 'https://github.com/conduit-obs/.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Pull + render the helm chart
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          helm pull oci://ghcr.io/conduit-obs/charts/conduit-agent --version "$ver"
+          helm template ./conduit-agent-"$ver".tgz \
+            --set conduit.serviceName=release-smoke \
+            --set honeycomb.apiKey=dummy >/dev/null
+      - name: Install the published deb in a clean container
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/conduit_${ver}_linux_amd64.deb"
+          docker run --rm debian:12 bash -c "
+            set -e
+            apt-get update -qq && apt-get install -y curl ca-certificates >/dev/null
+            curl -fsSL -o /tmp/conduit.deb '$url'
+            apt-get install -y /tmp/conduit.deb
+            conduit version
+          "
+
   notify:
     name: Notify maintainers
     runs-on: ubuntu-latest
-    needs: [goreleaser, helm, publish]
+    needs: [goreleaser, helm, windows-msi, publish, verify]
     if: always()
     steps:
       - name: Summarize the release status
         run: |
           gr="${{ needs.goreleaser.result }}"
           hl="${{ needs.helm.result }}"
+          msi="${{ needs.windows-msi.result }}"
           pb="${{ needs.publish.result }}"
-          if [ "$gr" != "success" ] || [ "$hl" != "success" ] || [ "$pb" != "success" ]; then
-            echo "::warning::release ${GITHUB_REF_NAME} did not complete cleanly (goreleaser=$gr helm=$hl publish=$pb); see the failed job(s). The release stays in Draft per runbook §5 until the failure is fixed and the workflow re-runs."
+          vf="${{ needs.verify.result }}"
+          if [ "$gr" != "success" ] || [ "$hl" != "success" ] || [ "$msi" != "success" ] || [ "$pb" != "success" ] || [ "$vf" != "success" ]; then
+            echo "::warning::release ${GITHUB_REF_NAME} did not complete cleanly (goreleaser=$gr helm=$hl msi=$msi publish=$pb verify=$vf); see the failed job(s). The release stays in Draft per runbook §5 until fixed and re-run."
             exit 0
           fi
-          echo "release ${GITHUB_REF_NAME} published — verify per docs/release/runbook.md §6"
+          echo "release ${GITHUB_REF_NAME} published + verified — see docs/release/runbook.md §6"

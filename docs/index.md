@@ -62,6 +62,8 @@ for the build doctrine.
 
 - [**Runbook**](release/runbook.md) — end-to-end "git tag →
   published artifacts → docs site" workflow.
+- [**CI/CD pipeline**](release/ci-cd.md) — the automated build, test,
+  sign, publish, and verify workflows + required secrets.
 - [**Compatibility matrix**](release/compatibility.md) — Conduit ↔
   upstream OTel Collector core version policy.
 - [**Launch checklist**](release/launch-checklist.md) — the go/no-go
