@@ -60,3 +60,6 @@ prod-conduit.yaml
 # not published to the OSS repo. Public-facing planning lives in GitHub
 # Issues / a project board.
 /conduit-agent-plan/
+
+# Local work directory
+/work/
