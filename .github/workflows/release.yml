@@ -35,7 +35,7 @@ jobs:
     name: Pre-flight checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Verify the tag is signed
@@ -46,7 +46,7 @@ jobs:
           if ! git verify-tag "${GITHUB_REF_NAME}" 2>/dev/null; then
             echo "::warning::tag ${GITHUB_REF_NAME} is not GPG-signed; runbook §4 will require signed tags once every maintainer has a key"
           fi
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -88,11 +88,11 @@ jobs:
       HAS_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
     steps:
       - name: Check out at the tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -123,7 +123,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: goreleaser
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: azure/setup-helm@v4
@@ -211,10 +211,10 @@ jobs:
     env:
       HAS_CERT: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
       - name: Compute versions
