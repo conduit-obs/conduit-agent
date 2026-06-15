@@ -205,6 +205,34 @@ type templateView struct {
 	// this graduated from the overrides:-only path to a curated knob.
 	OBIJavaTLS bool
 
+	// K8sCluster toggles the receivers.k8s_cluster block and adds
+	// "k8s_cluster" to the metrics pipeline. True only for
+	// profile.mode=k8s-cluster — the cluster-singleton collector that
+	// emits cluster-state metrics (deployment/replica counts, pod
+	// phase, node conditions). Deployed once per cluster by the Helm
+	// chart's Deployment so the data isn't duplicated per node.
+	K8sCluster bool
+
+	// K8sObjects toggles the receivers.k8sobjects block and adds
+	// "k8sobjects" to the logs pipeline. True only for
+	// profile.mode=k8s-cluster; it watches the Kubernetes Events API
+	// and emits each event as a log record.
+	K8sObjects bool
+
+	// PrometheusEnabled toggles emission of the receivers.prometheus
+	// block and adds "prometheus" to the metrics pipeline. True only
+	// when cfg.Metrics.Prometheus has at least one scrape job. The
+	// receiver surfaces the entire Prometheus exporter ecosystem
+	// (node_exporter, kube-state-metrics, app /metrics, …) without a
+	// per-source receiver. See metrics.prometheus in config/types.go.
+	PrometheusEnabled bool
+
+	// PrometheusJobs is the curated scrape-job list rendered into
+	// receivers.prometheus.config.scrape_configs. Each job is already
+	// defaulted (interval / path / scheme) by config.applyDefaults so
+	// the template reads known-good values.
+	PrometheusJobs []config.PrometheusScrapeConfig
+
 	// OBINodeJS, when true, emits `nodejs: { enabled: true }` under
 	// receivers.obi so OBI's NodeJS injector loads its language-side
 	// hook into discovered Node processes. Without it the OBI generic
@@ -364,6 +392,20 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 		v.LogReceivers = append(v.LogReceivers, ids.logs...)
 	}
 
+	// k8s-cluster profile: the cluster-singleton receiver set. Unlike
+	// the per-node k8s profile (loaded as fragments above), these two
+	// receivers must run exactly once per cluster, so they render
+	// inline (like OBI) and the Helm chart deploys profile.mode=
+	// k8s-cluster as a single-replica Deployment. k8s_cluster emits
+	// cluster-state metrics; k8sobjects watches Kubernetes events as
+	// logs. RBAC for the read scope lives in the chart's ClusterRole.
+	if cfg.Profile != nil && cfg.Profile.Mode == config.ProfileModeK8sCluster {
+		v.K8sCluster = true
+		v.K8sObjects = true
+		v.MetricReceivers = append(v.MetricReceivers, "k8s_cluster")
+		v.LogReceivers = append(v.LogReceivers, "k8sobjects")
+	}
+
 	// OBI receiver (ADR-0020). The applyDefaults pass in
 	// internal/config/load.go has already pre-filled cfg.OBI.Enabled
 	// per the resolved profile (k8s -> true, others -> false), so
@@ -386,6 +428,16 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 		}
 		v.TraceReceivers = append(v.TraceReceivers, "obi")
 		v.MetricReceivers = append(v.MetricReceivers, "obi")
+	}
+
+	// Prometheus scrape jobs (metrics.prometheus). When the operator
+	// declared at least one scrape job, render the prometheus receiver
+	// and add it to the metrics pipeline. Off entirely when no jobs
+	// are configured so the common case renders no prometheus block.
+	if cfg.Metrics != nil && cfg.Metrics.Prometheus != nil && len(cfg.Metrics.Prometheus.ScrapeConfigs) > 0 {
+		v.PrometheusEnabled = true
+		v.PrometheusJobs = cfg.Metrics.Prometheus.ScrapeConfigs
+		v.MetricReceivers = append(v.MetricReceivers, "prometheus")
 	}
 
 	v.TraceProcessors = pipelineProcessorIDs(signalTraces, v.K8sAttributes)
@@ -564,7 +616,7 @@ func resolveOTLPBindAddress(p *config.Profile) string {
 		return "127.0.0.1"
 	}
 	switch p.Mode {
-	case config.ProfileModeDocker, config.ProfileModeK8s:
+	case config.ProfileModeDocker, config.ProfileModeK8s, config.ProfileModeK8sCluster:
 		return "0.0.0.0"
 	default:
 		return "127.0.0.1"
@@ -597,7 +649,10 @@ func resolvePlatform(p *config.Profile, warnW io.Writer) string {
 		return ""
 	}
 	switch p.Mode {
-	case config.ProfileModeNone:
+	case config.ProfileModeNone, config.ProfileModeK8sCluster:
+		// none: OTLP-only. k8s-cluster: its receivers (k8s_cluster,
+		// k8sobjects) render inline in newView, not as OS fragments,
+		// so there is no fragment platform to load here.
 		return ""
 	case config.ProfileModeLinux, config.ProfileModeDarwin, config.ProfileModeDocker, config.ProfileModeK8s, config.ProfileModeWindows:
 		return string(p.Mode)

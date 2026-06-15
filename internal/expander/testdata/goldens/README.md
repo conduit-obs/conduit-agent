@@ -52,6 +52,8 @@ change.
 | 08 | `windows-default` | M6 path — windows hostmetrics + windowseventlog/{application,system} + 127.0.0.1 OTLP bind |
 | 09 | `darwin-default` | Dev/local laptop install — macOS hostmetrics + macOS-side filelog/system + 127.0.0.1 OTLP bind |
 | 10 | `no-profile-red-off` | Minimal-renderable — smallest possible output for regression-baseline diffs |
+| 11 | `prometheus-scrape` | `metrics.prometheus.scrape_configs` → `prometheus` receiver (defaulted interval/path/scheme) wired onto the metrics pipeline |
+| 12 | `k8s-cluster` | Cluster-singleton profile — `k8s_cluster` (metrics) + `k8sobjects` events (logs), no per-node receivers |
 
 The matrix is intentionally hand-curated rather than exhaustive
 (the full `platform × output × RED × queue` cross-product would be

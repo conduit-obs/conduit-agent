@@ -1,0 +1,20 @@
+# 12-k8s-cluster — cluster-singleton profile.
+#
+# Proves: profile.mode: k8s-cluster renders the cluster-scoped
+# receivers (k8s_cluster on metrics, k8sobjects events on logs) with
+# OTLP bound to 0.0.0.0, and does NOT load the per-node k8s fragments
+# (hostmetrics / kubeletstats / filelog) or the k8sattributes
+# processor. The Helm chart deploys this as a single-replica
+# Deployment alongside the per-node DaemonSet. metrics.red.enabled:
+# false keeps the render focused on the cluster wiring.
+service_name: k8s-cluster-demo
+deployment_environment: production
+profile:
+  mode: k8s-cluster
+metrics:
+  red:
+    enabled: false
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:HONEYCOMB_API_KEY}

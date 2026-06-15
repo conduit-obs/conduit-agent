@@ -173,7 +173,7 @@ entirely, defaults are applied as if you wrote
 
 ```yaml
 profile:
-  mode: auto              # auto | linux | darwin | docker | k8s | windows | none
+  mode: auto              # auto | linux | darwin | docker | k8s | k8s-cluster | windows | none
   host_metrics: true      # default: true unless mode=none
   system_logs: true       # default: true unless mode=none
 ```
@@ -186,7 +186,8 @@ profile:
 | `linux` | hostmetrics + filelog (`/var/log/syslog`, `/var/log/messages`) + journald receiver. |
 | `darwin` | hostmetrics + filelog + console-log fragments. |
 | `docker` | OTLP bound to `0.0.0.0`; no hostmetrics fragment by default (the docker getting-started uses bind mounts and `--pid=host` to scrape the host's `/proc`). |
-| `k8s` | OTLP bound to `0.0.0.0`; kubeletstats + filelog/k8s + k8sattributes. The Helm chart wires up the rest (RBAC, ServiceAccount, host bind mounts). |
+| `k8s` | OTLP bound to `0.0.0.0`; kubeletstats + filelog/k8s + k8sattributes. The **per-node** profile — the Helm chart runs it as a DaemonSet and wires up the rest (RBAC, ServiceAccount, host bind mounts). |
+| `k8s-cluster` | OTLP bound to `0.0.0.0`; the **cluster-singleton** companion to `k8s`. Renders `k8s_cluster` (cluster-state metrics) + `k8sobjects` (Kubernetes events → logs) — the receivers that must run exactly once per cluster. The Helm chart deploys it as a single-replica Deployment (`clusterCollector.enabled=true`). No per-node fragments, no `k8sattributes`, and OBI is rejected (it belongs on the per-node DaemonSet). |
 | `windows` | hostmetrics with the Windows scrapers + windowseventlogreceiver (Application + System channels; Security is opt-in via `overrides:`). |
 | `none` | OTLP-only; no platform defaults. Useful for sidecars that should only forward what apps explicitly send them. |
 
@@ -203,8 +204,9 @@ windowseventlog). Same default rule as `host_metrics`.
 
 ## `metrics` (optional, object)
 
-Configures Conduit's derived-metrics behavior. V0 ships exactly one
-nested block (RED).
+Configures Conduit's derived- and scraped-metrics behavior. Two nested
+blocks: `red` (the spans→RED tee) and `prometheus` (a curated scrape
+surface).
 
 ### `metrics.red`
 
@@ -302,6 +304,44 @@ Total unique dimension-value combinations the connector tracks.
 Excess combinations are dropped into a single overflow series tagged
 `otel.metric.overflow="true"`. Maps directly to the upstream
 `aggregation_cardinality_limit`.
+
+### `metrics.prometheus`
+
+A curated surface over the upstream `prometheusreceiver`. Declare one or
+more static scrape jobs and the agent renders a `prometheus` receiver
+onto the **metrics** pipeline. This is the single highest-leverage
+"cloud native" integration: it unlocks the entire Prometheus exporter
+ecosystem — `node_exporter`, `kube-state-metrics`, application
+`/metrics` endpoints, `redis_exporter`, `nginx-prometheus-exporter`, and
+the rest — without compiling in a receiver per data source.
+
+```yaml
+metrics:
+  prometheus:
+    scrape_configs:
+      - job_name: node-exporter
+        targets: ["localhost:9100"]
+      - job_name: app
+        targets: ["10.0.0.5:8080", "10.0.0.6:8080"]
+        scrape_interval: 15s          # default: 30s
+        metrics_path: /actuator/prometheus   # default: /metrics
+        scheme: http                  # default: http (http | https)
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `job_name` | yes | — | Becomes the `job` label; must be unique within the list. |
+| `targets` | yes | — | One or more `host:port` endpoints (one `static_configs` target list). |
+| `scrape_interval` | no | `30s` | Any positive Go duration (`15s`, `1m`). |
+| `metrics_path` | no | `/metrics` | HTTP path scraped on each target. |
+| `scheme` | no | `http` | `http` or `https`. |
+
+Advanced scrape configuration — `relabel_configs`, `basic_auth`,
+per-target `tls_config`, and `*_sd_configs` service discovery — is not
+part of the curated surface. Reach it through
+[`overrides:`](#overrides-optional-map) at
+`overrides.receivers.prometheus.config.<...>`, deep-merged over the
+rendered receiver per [ADR-0012](../adr/adr-0012.md).
 
 ## `overrides` (optional, map)
 

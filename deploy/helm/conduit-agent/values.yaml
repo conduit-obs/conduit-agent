@@ -301,6 +301,52 @@ daemonset:
   runAsRoot: true
 
 # ---------------------------------------------------------------------------
+# Cluster-singleton collector (profile.mode=k8s-cluster).
+#
+# The DaemonSet above runs the PER-NODE k8s profile. Some Kubernetes
+# telemetry is cluster-scoped and must be collected exactly once to
+# avoid N-times duplication: cluster-state metrics (k8s_cluster —
+# deployment/replica counts, pod phase, node conditions, resource
+# quotas) and Kubernetes events (k8sobjects, emitted as logs). When
+# enabled, the chart deploys a SINGLE-replica Deployment running
+# profile.mode=k8s-cluster for exactly that data. It reuses the same
+# ServiceAccount, ClusterRole (the extra read rules switch on with
+# this flag — see templates/clusterrole.yaml), and output settings as
+# the DaemonSet. Requires rbac.create=true (or an equivalently-scoped
+# externally-managed ClusterRole bound to serviceAccount.name).
+# ---------------------------------------------------------------------------
+clusterCollector:
+  enabled: false
+
+  # Keep replicas at 1. k8s_cluster and k8sobjects are cluster-singleton
+  # receivers; more than one replica duplicates every series and event
+  # (there is no leader election — that's an upstream roadmap item, not
+  # a Conduit knob).
+  replicas: 1
+
+  # The cluster collector talks to the Kubernetes API, not the node's
+  # host filesystem, so it needs neither host mounts, hostPID, nor
+  # root — it runs with a locked-down nonroot security context.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  # Empty by default — the single cluster pod schedules on any normal
+  # worker. Add tolerations if you want it on tainted nodes.
+  tolerations: []
+
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+# ---------------------------------------------------------------------------
 # RBAC. The default M5.B fragment set (kubeletstats + k8sattributes)
 # needs cluster-scoped read access to nodes/stats, pods, namespaces, and
 # the apps + batch APIs that own pods. The ClusterRole granted here is

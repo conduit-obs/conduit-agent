@@ -20,7 +20,7 @@ const OPTIONS: Array<{
     id: "k8s",
     title: "Kubernetes",
     description:
-      "Helm chart deploys a DaemonSet across all nodes. kubeletstats + filelog/k8s + k8sattributes are pre-wired.",
+      "Helm chart deploys a per-node DaemonSet (kubeletstats + filelog/k8s + k8sattributes pre-wired). Optionally add a single cluster collector for cluster-state metrics + Kubernetes events.",
     icon: "⎈",
   },
   {

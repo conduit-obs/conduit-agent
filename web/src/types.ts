@@ -9,7 +9,13 @@ export type CollectKind =
   | "host_metrics"
   | "system_logs"
   | "otlp_app_traces"
-  | "obi_zero_code";
+  | "obi_zero_code"
+  // k8s only. Adds the cluster-singleton collector (a 1-replica
+  // Deployment running profile.mode=k8s-cluster) for cluster-state
+  // metrics (k8s_cluster) + Kubernetes events (k8sobjects). Distinct
+  // from the per-node DaemonSet because this data must be collected
+  // exactly once per cluster, not once per node. Off by default.
+  | "cluster_state";
 
 export type Destination = "honeycomb" | "otlp_generic";
 
@@ -131,15 +137,20 @@ function applyPlatformSideEffects(state: WizardState): WizardState {
     collect.delete("host_metrics");
     collect.delete("system_logs");
     collect.delete("obi_zero_code");
+    collect.delete("cluster_state");
   } else if (state.platform === "k8s") {
     // k8s replaces "host metrics" with kubelet stats — operationally the
     // same offering, but we don't expose kubelet as a separate toggle.
     collect.add("host_metrics");
     collect.add("system_logs");
+    // cluster_state stays opt-in: it deploys a SECOND workload (the
+    // single-replica cluster collector), so we don't enable it without
+    // the user asking.
   } else {
     // linux / darwin / windows: defaults restored.
     collect.add("host_metrics");
     collect.add("system_logs");
+    collect.delete("cluster_state"); // k8s-only
     if (state.platform !== "linux") {
       // OBI is gated to linux + k8s; the k8s branch above already
       // bypasses this, so platforms that fall here (darwin, windows)

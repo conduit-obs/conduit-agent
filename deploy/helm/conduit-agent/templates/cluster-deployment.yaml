@@ -1,0 +1,139 @@
+{{- if .Values.clusterCollector.enabled -}}
+{{- /*
+Same honeycomb-key preflight as the DaemonSet: fail at install time
+rather than CrashLoopBackOff if the output is honeycomb but no key
+source is set.
+*/ -}}
+{{- if eq (include "conduit-agent.outputMode" .) "honeycomb" -}}
+{{- if and (not .Values.honeycomb.apiKey) (not .Values.honeycomb.existingSecret) -}}
+{{- fail "honeycomb.apiKey or honeycomb.existingSecret must be set when output mode is honeycomb (default). Set one via --set, or switch outputs with otlp.enabled / gateway.enabled." -}}
+{{- end -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster
+spec:
+  # Single replica by contract — k8s_cluster / k8sobjects are
+  # cluster-singleton receivers. Recreate (not RollingUpdate) so two
+  # replicas never run concurrently during a rollout and double-emit.
+  replicas: {{ .Values.clusterCollector.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "conduit-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cluster
+  template:
+    metadata:
+      labels:
+        {{- include "conduit-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cluster
+        {{- with .Values.clusterCollector.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/cluster-configmap.yaml") . | sha256sum }}
+        {{- if and (eq (include "conduit-agent.outputMode" .) "honeycomb") (not .Values.honeycomb.existingSecret) (.Values.honeycomb.apiKey) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.clusterCollector.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "conduit-agent.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clusterCollector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clusterCollector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clusterCollector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: conduit
+          image: {{ include "conduit-agent.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --config
+            - /etc/conduit/conduit.yaml
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+          env:
+            {{- if eq (include "conduit-agent.outputMode" .) "honeycomb" }}
+            - name: HONEYCOMB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conduit-agent.honeycombSecretName" . }}
+                  key: {{ .Values.honeycomb.existingSecretKey }}
+            {{- end }}
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: K8S_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.clusterCollector.resources | nindent 12 }}
+          securityContext:
+            # No host introspection here — the cluster collector reads
+            # the Kubernetes API, not the node — so it runs fully
+            # locked down (nonroot, read-only rootfs, all caps dropped).
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/conduit
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "conduit-agent.fullname" . }}-cluster
+            items:
+              - key: conduit.yaml
+                path: conduit.yaml
+{{- end -}}

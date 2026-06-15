@@ -65,4 +65,28 @@ rules:
       - cronjobs
       - jobs
     verbs: ["get", "list", "watch"]
+{{- if .Values.clusterCollector.enabled }}
+  # Cluster-singleton collector (clusterCollector.enabled): the
+  # k8s_cluster receiver reads cluster-wide object state (resource
+  # quotas, replication controllers, horizontal pod autoscalers) and
+  # the k8sobjects receiver watches the Events API. Read-only, no
+  # Secret access — same posture as the rules above. The pods / nodes /
+  # namespaces / services / apps / batch reads k8s_cluster also needs
+  # are already granted by the rules above (shared with kubeletstats /
+  # k8sattributes).
+  - apiGroups: [""]
+    resources:
+      - events
+      - replicationcontrollers
+      - resourcequotas
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]
+{{- end }}
 {{- end -}}

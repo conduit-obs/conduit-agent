@@ -1773,6 +1773,127 @@ output:
 	}
 }
 
+// TestExpand_PrometheusScrape asserts metrics.prometheus.scrape_configs
+// renders the prometheus receiver (one static job per entry, with
+// applyDefaults filling interval/path/scheme) and wires it onto the
+// metrics pipeline only.
+func TestExpand_PrometheusScrape(t *testing.T) {
+	yaml := `
+service_name: prom-demo
+deployment_environment: dev
+profile:
+  mode: none
+metrics:
+  red:
+    enabled: false
+  prometheus:
+    scrape_configs:
+      - job_name: node-exporter
+        targets: ["localhost:9100"]
+      - job_name: app
+        targets: ["10.0.0.5:8080", "10.0.0.6:8080"]
+        scrape_interval: 15s
+        metrics_path: /actuator/prometheus
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	cfg, err := config.Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("config.Parse: %v", err)
+	}
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"  prometheus:\n",
+		"      scrape_configs:\n",
+		`- job_name: "node-exporter"`,
+		// interval / path / scheme below are filled by applyDefaults.
+		"scrape_interval: 30s",
+		`metrics_path: "/metrics"`,
+		"scheme: http",
+		`- job_name: "app"`,
+		"scrape_interval: 15s",
+		`metrics_path: "/actuator/prometheus"`,
+		`- "10.0.0.5:8080"`,
+		`- "10.0.0.6:8080"`,
+	})
+
+	// The receiver lands on the metrics pipeline (after otlp), and
+	// never on traces or logs.
+	mustContain(t, out, []string{"    metrics:\n      receivers:\n        - otlp\n        - prometheus\n"})
+	if strings.Contains(out, "traces:\n      receivers:\n        - otlp\n        - prometheus") {
+		t.Errorf("prometheus receiver leaked onto the traces pipeline")
+	}
+}
+
+// TestExpand_PrometheusOmittedByDefault asserts that without a
+// metrics.prometheus block the receiver is not rendered at all.
+func TestExpand_PrometheusOmittedByDefault(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeNone})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustNotContain(t, out, []string{"  prometheus:\n", "scrape_configs:", "- prometheus"})
+}
+
+// TestExpand_K8sClusterProfile asserts profile.mode=k8s-cluster renders
+// the cluster-singleton receivers (k8s_cluster on metrics, k8sobjects on
+// logs), binds OTLP to 0.0.0.0, and does NOT pull in the per-node k8s
+// fragments (kubeletstats / filelog) or the k8sattributes processor.
+func TestExpand_K8sClusterProfile(t *testing.T) {
+	cfg := honeycomb(&config.Profile{Mode: config.ProfileModeK8sCluster})
+	out, err := Expand(cfg)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		"  k8s_cluster:\n",
+		"auth_type: serviceAccount",
+		"  k8sobjects:\n",
+		"group: events.k8s.io",
+		"endpoint: 0.0.0.0:4317",
+		"endpoint: 0.0.0.0:4318",
+		"    metrics:\n      receivers:\n        - otlp\n        - k8s_cluster\n",
+		"    logs:\n      receivers:\n        - otlp\n        - k8sobjects\n",
+	})
+	// Per-node-only machinery must be absent on the cluster singleton.
+	// Match receiver/processor declarations (block headers), not the
+	// word "filelog" which appears in the always-on transform/logs
+	// explanatory comment.
+	mustNotContain(t, out, []string{
+		"kubeletstats:",
+		"filelog/k8s:",
+		"hostmetrics:",
+		"k8sattributes:",
+	})
+}
+
+// TestExpand_K8sClusterRejectsOBI locks in the validator rule that OBI
+// (a per-node eBPF receiver) cannot run on the cluster-singleton
+// profile.
+func TestExpand_K8sClusterRejectsOBI(t *testing.T) {
+	yaml := `
+service_name: cluster
+deployment_environment: dev
+profile:
+  mode: k8s-cluster
+obi:
+  enabled: true
+output:
+  mode: honeycomb
+  honeycomb:
+    api_key: ${env:KEY}
+`
+	if _, err := config.Parse(strings.NewReader(yaml)); err == nil {
+		t.Fatalf("expected validation error for obi.enabled on profile.mode=k8s-cluster, got nil")
+	}
+}
+
 func mustContain(t *testing.T, haystack string, needles []string) {
 	t.Helper()
 	for _, n := range needles {

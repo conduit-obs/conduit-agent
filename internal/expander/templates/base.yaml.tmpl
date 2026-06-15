@@ -123,6 +123,56 @@ receivers:
         enable: "true"
 {{- end }}
 {{- end }}
+{{- if .K8sCluster }}
+  # k8s_cluster emits cluster-state metrics (deployment / replica
+  # counts, pod phase, node conditions, resource quotas) by watching
+  # the Kubernetes API. Rendered only for profile.mode=k8s-cluster,
+  # which the Helm chart deploys as a SINGLE replica so this
+  # cluster-scoped data is collected once, not once per node. The
+  # read-only RBAC it needs lives in the chart's ClusterRole.
+  k8s_cluster:
+    auth_type: serviceAccount
+    collection_interval: 30s
+    node_conditions_to_report: [Ready, MemoryPressure, DiskPressure, PIDPressure, NetworkUnavailable]
+    allocatable_types_to_report: [cpu, memory, ephemeral-storage, pods]
+{{- end }}
+{{- if .K8sObjects }}
+  # k8sobjects watches the Kubernetes Events API and emits each event
+  # as a log record (k8s.object.* attributes), so cluster activity —
+  # scheduling decisions, image pulls, OOMKills, probe failures —
+  # lands in the logs pipeline. Pairs with k8s_cluster on the
+  # cluster-singleton collector (profile.mode=k8s-cluster).
+  k8sobjects:
+    auth_type: serviceAccount
+    objects:
+      - name: events
+        mode: watch
+        group: events.k8s.io
+{{- end }}
+{{- if .PrometheusEnabled }}
+  # prometheus scrapes operator-declared /metrics endpoints
+  # (metrics.prometheus.scrape_configs). This is the curated surface
+  # over the upstream prometheusreceiver — it unlocks the whole
+  # Prometheus exporter ecosystem (node_exporter, kube-state-metrics,
+  # app /metrics, redis_exporter, nginx-prometheus-exporter, …)
+  # without a per-source receiver. Advanced scrape config
+  # (relabel_configs, basic_auth, tls_config, *_sd_configs) is reached
+  # through overrides.receivers.prometheus.config.<...> per ADR-0012.
+  prometheus:
+    config:
+      scrape_configs:
+{{- range .PrometheusJobs }}
+        - job_name: {{ .JobName | q }}
+          scrape_interval: {{ .ScrapeInterval }}
+          metrics_path: {{ .MetricsPath | q }}
+          scheme: {{ .Scheme }}
+          static_configs:
+            - targets:
+{{- range .Targets }}
+                - {{ . | q }}
+{{- end }}
+{{- end }}
+{{- end }}
 
 processors:
   memory_limiter:

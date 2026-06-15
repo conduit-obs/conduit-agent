@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ValidationError is a structured error returned by Validate. It accumulates
@@ -151,10 +152,10 @@ func (v *validator) validateProfile(p *Profile) {
 		return
 	}
 	switch p.Mode {
-	case ProfileModeAuto, ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeWindows, ProfileModeNone:
+	case ProfileModeAuto, ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeK8sCluster, ProfileModeWindows, ProfileModeNone:
 		// known mode
 	default:
-		v.add("profile.mode", fmt.Sprintf(`unknown value %q; want one of "auto", "linux", "darwin", "docker", "k8s", or "none"`, string(p.Mode)))
+		v.add("profile.mode", fmt.Sprintf(`unknown value %q; want one of "auto", "linux", "darwin", "docker", "k8s", "k8s-cluster", "windows", or "none"`, string(p.Mode)))
 	}
 }
 
@@ -184,6 +185,50 @@ func (v *validator) validateMetrics(m *Metrics) {
 		if reason, blocked := REDDimensionDenylist[name]; blocked {
 			v.add(fmt.Sprintf("metrics.red.extra_resource_dimensions[%d]", i),
 				fmt.Sprintf(`%q is on the cardinality denylist (CDT0501): %s. See ADR-0006.`, name, reason))
+		}
+	}
+
+	v.validatePrometheus(m.Prometheus)
+}
+
+// validatePrometheus checks the curated Prometheus scrape surface: every
+// job needs a unique non-empty job_name and at least one target, and the
+// optional scrape_interval / scheme fields must be well-formed. The
+// receiver itself rejects malformed advanced config (relabeling, SD) the
+// operator threads through overrides:, so we only guard the curated
+// fields here.
+func (v *validator) validatePrometheus(p *PrometheusConfig) {
+	if p == nil {
+		return
+	}
+	seen := make(map[string]bool, len(p.ScrapeConfigs))
+	for i, sc := range p.ScrapeConfigs {
+		base := fmt.Sprintf("metrics.prometheus.scrape_configs[%d]", i)
+		name := strings.TrimSpace(sc.JobName)
+		switch {
+		case name == "":
+			v.add(base+".job_name", "required; non-empty string (becomes the job label on scraped series)")
+		case seen[name]:
+			v.add(base+".job_name", fmt.Sprintf("duplicate job_name %q; each scrape job needs a unique name", name))
+		default:
+			seen[name] = true
+		}
+		if len(sc.Targets) == 0 {
+			v.add(base+".targets", "required; at least one host:port target")
+		}
+		for j, t := range sc.Targets {
+			if strings.TrimSpace(t) == "" {
+				v.add(fmt.Sprintf("%s.targets[%d]", base, j), "must be a non-empty host:port target")
+			}
+		}
+		if sc.ScrapeInterval != "" {
+			if d, err := time.ParseDuration(sc.ScrapeInterval); err != nil || d <= 0 {
+				v.add(base+".scrape_interval",
+					fmt.Sprintf("must be a positive Go duration (e.g. 15s, 1m); got %q", sc.ScrapeInterval))
+			}
+		}
+		if sc.Scheme != "" && sc.Scheme != "http" && sc.Scheme != "https" {
+			v.add(base+".scheme", fmt.Sprintf(`must be "http" or "https"; got %q`, sc.Scheme))
 		}
 	}
 }
@@ -230,6 +275,16 @@ func (v *validator) validateOBI(o *OBI, p *Profile) {
 				fmt.Sprintf("OBI is Linux-only (eBPF receiver); current profile.mode is %q. "+
 					"Remove the obi: block, set obi.enabled: false, or run on Linux. See ADR-0020.",
 					string(p.Mode)))
+		case ProfileModeK8sCluster:
+			// k8s-cluster is the single-replica cluster collector; OBI
+			// is a per-node eBPF receiver that belongs on the DaemonSet
+			// (profile.mode=k8s), where one replica per node can attach
+			// probes to that node's processes. Enabling it on the
+			// cluster singleton would only ever see one node.
+			v.add("obi.enabled",
+				"OBI is a per-node eBPF receiver and does not belong on the cluster-singleton "+
+					"profile.mode=k8s-cluster collector; enable OBI on the per-node profile.mode=k8s "+
+					"DaemonSet instead. See ADR-0020.")
 		}
 	}
 

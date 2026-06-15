@@ -138,7 +138,7 @@ func otlpBindHost(p *config.Profile) string {
 		return "127.0.0.1"
 	}
 	switch p.Mode {
-	case config.ProfileModeDocker, config.ProfileModeK8s:
+	case config.ProfileModeDocker, config.ProfileModeK8s, config.ProfileModeK8sCluster:
 		return "0.0.0.0"
 	default:
 		return "127.0.0.1"

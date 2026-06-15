@@ -5,6 +5,25 @@ guide takes you from "I have a kubectl context" to "every node's
 host metrics, kubelet metrics, container logs, and OTLP traffic from
 every pod are landing in Honeycomb."
 
+## Two collectors, two jobs
+
+Kubernetes telemetry splits into two shapes, and Conduit deploys a
+workload for each:
+
+| | Profile | Workload | Collects |
+|---|---|---|---|
+| **Per-node** (default) | `k8s` | DaemonSet — one pod **per node** | Node host metrics, kubelet/pod metrics, container logs, OTLP from app pods, optional eBPF (OBI). |
+| **Cluster-scoped** (opt-in) | `k8s-cluster` | Deployment — **one pod per cluster** | Cluster-state metrics (`k8s_cluster`) + Kubernetes events (`k8sobjects`). |
+
+The DaemonSet is all you need for node/pod metrics, container logs,
+app traces, and eBPF — Steps 1–5 cover it. The cluster collector is a
+separate, optional add-on (Step 6) for data that must be gathered
+**exactly once** per cluster: running it on every node would duplicate
+every cluster metric and event N times. eBPF (OBI) lives only on the
+DaemonSet, since it attaches to each node's processes. See the
+[architecture overview](../architecture/overview.md#receivers-shipped)
+for the full rationale.
+
 ## What you'll have at the end
 
 - A `conduit-agent` DaemonSet running one pod per node in the
@@ -21,6 +40,8 @@ every pod are landing in Honeycomb."
 - An OTLP receiver bound to `0.0.0.0:4317` / `:4318` inside each agent
   pod, exposed via a per-namespace `Service` so app pods can send
   traces to `conduit-agent.conduit.svc:4317`.
+- _(Optional, Step 6)_ a single-replica cluster collector adding
+  cluster-state metrics and Kubernetes events.
 
 ## Prerequisites (5 min)
 
@@ -231,6 +252,46 @@ helm upgrade conduit oci://ghcr.io/conduit-obs/charts/conduit-agent \
 
 The chart's rolling-upgrade strategy means each agent pod restarts
 in turn; total disruption window is ~30 seconds per node.
+
+## Step 6 — Cluster-state metrics + events (optional)
+
+The DaemonSet you installed runs the **per-node** profile
+(`profile.mode=k8s`): host metrics, kubelet stats, and container logs
+from each node. Some Kubernetes telemetry is **cluster-scoped** — it
+must be collected exactly once or you get one copy per node:
+
+- **Cluster-state metrics** (`k8s_cluster`): deployment / replica
+  counts, pod phase, node conditions, resource-quota usage.
+- **Kubernetes events** (`k8sobjects`): scheduling decisions, image
+  pulls, OOMKills, probe failures — emitted as logs.
+
+Enable the single-replica cluster collector to add them:
+
+```yaml
+# values.override.yaml
+clusterCollector:
+  enabled: true
+```
+
+```sh
+helm upgrade conduit oci://ghcr.io/conduit-obs/charts/conduit-agent \
+  --version 0.x.y \
+  --namespace conduit \
+  -f values.override.yaml
+```
+
+This deploys a second workload — a `Deployment` with **one** replica
+running `profile.mode=k8s-cluster` — alongside the DaemonSet. It reuses
+the same ServiceAccount and output settings; the extra read-only RBAC
+it needs (`events`, `resourcequotas`, `replicationcontrollers`,
+`horizontalpodautoscalers`) switches on with the flag (requires
+`rbac.create=true`). Keep `clusterCollector.replicas` at `1`: these
+receivers are cluster-singletons, so a second replica would
+double-emit every series and event.
+
+```sh
+kubectl -n conduit get deploy,pod -l app.kubernetes.io/component=cluster
+```
 
 ## Troubleshooting
 

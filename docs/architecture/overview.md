@@ -126,7 +126,8 @@ not on traces). See [ADR-0022](../adr/adr-0022.md).
 | darwin | `otlp`, `hostmetrics` (cpu, memory, filesystem, network, load), `filelog` (`/var/log/system.log`, console) |
 | windows | `otlp`, `hostmetrics` (cpu, memory, filesystem, network, paging, processes), `windowseventlog/application`, `windowseventlog/system`. Security channel is **not** loaded by default; see the [Windows getting-started](../getting-started/windows.md#step-5--enable-the-security-event-log-advanced) for how to opt in. |
 | docker | `otlp` only (bound to `0.0.0.0:4317` / `:4318`). Host metrics require the bind-mount + `--pid=host` recipe in the [Docker guide](../getting-started/docker.md). |
-| k8s | `otlp` (bound to `0.0.0.0`), `hostmetrics` (per-node), `kubeletstats`, `filelog/k8s` (reads `/var/log/pods/`). |
+| k8s | `otlp` (bound to `0.0.0.0`), `hostmetrics` (per-node), `kubeletstats`, `filelog/k8s` (reads `/var/log/pods/`). The **per-node** profile (Helm DaemonSet). |
+| k8s-cluster | `otlp` (bound to `0.0.0.0`), `k8s_cluster` (cluster-state metrics), `k8sobjects` (Kubernetes events → logs). The **cluster-singleton** companion to `k8s` (Helm single-replica Deployment); these receivers render inline rather than as fragments and must run once per cluster. |
 | none | `otlp` only. Use this when Conduit runs as a sidecar that should only forward what apps explicitly send it. |
 
 The fragments live under

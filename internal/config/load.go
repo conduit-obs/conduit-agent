@@ -87,6 +87,25 @@ func (c *AgentConfig) applyDefaults() {
 		c.Metrics.RED.CardinalityLimit = DefaultREDCardinalityLimit
 	}
 
+	// Prometheus scrape-job defaults: fill the optional per-job knobs
+	// (interval / path / scheme) so the expander reads known-good
+	// values and `conduit preview` shows exactly what will be scraped.
+	// We mutate in place by index because range copies the struct.
+	if c.Metrics.Prometheus != nil {
+		for i := range c.Metrics.Prometheus.ScrapeConfigs {
+			sc := &c.Metrics.Prometheus.ScrapeConfigs[i]
+			if sc.ScrapeInterval == "" {
+				sc.ScrapeInterval = DefaultPrometheusScrapeInterval
+			}
+			if sc.MetricsPath == "" {
+				sc.MetricsPath = DefaultPrometheusMetricsPath
+			}
+			if sc.Scheme == "" {
+				sc.Scheme = DefaultPrometheusScheme
+			}
+		}
+	}
+
 	// OBI defaults: pre-fill Enabled per the profile so downstream
 	// readers (expander, doctor, helm-chart docs) always see a
 	// concrete bool rather than "depends on profile". K8s defaults

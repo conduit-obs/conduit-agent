@@ -118,6 +118,17 @@ const (
 	ProfileModeK8s     ProfileMode = "k8s"
 	ProfileModeWindows ProfileMode = "windows"
 	ProfileModeNone    ProfileMode = "none"
+	// ProfileModeK8sCluster is the cluster-singleton companion to
+	// ProfileModeK8s. Where "k8s" is the per-node DaemonSet
+	// (hostmetrics + kubeletstats + container logs + k8sattributes),
+	// "k8s-cluster" renders the cluster-scoped receivers that must run
+	// exactly once per cluster to avoid duplicate data: k8s_cluster
+	// (cluster-state metrics) and k8sobjects (Kubernetes events as
+	// logs). The Helm chart deploys it as a single-replica Deployment
+	// alongside the DaemonSet. OTLP still binds 0.0.0.0; OBI and the
+	// per-node fragments are intentionally absent. See ADR-0020's k8s
+	// note and docs/getting-started/kubernetes.md.
+	ProfileModeK8sCluster ProfileMode = "k8s-cluster"
 )
 
 // Profile turns the platform default fragments (host metrics, system log
@@ -178,7 +189,7 @@ func (p *Profile) ResolvedPlatform() string {
 	switch p.Mode {
 	case ProfileModeNone:
 		return ""
-	case ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeWindows:
+	case ProfileModeLinux, ProfileModeDarwin, ProfileModeDocker, ProfileModeK8s, ProfileModeK8sCluster, ProfileModeWindows:
 		return string(p.Mode)
 	case ProfileModeAuto, "":
 		switch runtime.GOOS {
@@ -307,7 +318,7 @@ func DefaultServiceNameForPlatform(platform string) string {
 		return "windows-host"
 	case "docker":
 		return "docker-host"
-	case "k8s":
+	case "k8s", "k8s-cluster":
 		return "k8s-cluster"
 	}
 	return ""
@@ -505,10 +516,11 @@ type GatewayOutput struct {
 	Insecure bool `yaml:"insecure,omitempty"`
 }
 
-// Metrics is the umbrella for metric-pipeline tuning. V0 ships exactly
-// one nested block (RED, the spans → request/error/duration tee); V1+
-// will likely add fields here for prometheusreceiver scrape config,
-// derived-metric rollups, etc.
+// Metrics is the umbrella for metric-pipeline tuning. It ships the RED
+// spans→request/error/duration tee (metrics.red) and a curated
+// Prometheus scrape surface (metrics.prometheus); future expansions
+// (derived-metric rollups, etc.) attach here so the schema doesn't
+// grow a top-level field per metric source.
 type Metrics struct {
 	// RED configures the span_metrics connector that tees RED metrics
 	// (request count / error count / duration histogram) off the traces
@@ -518,7 +530,74 @@ type Metrics struct {
 	// total-combination cardinality limit). See ADR-0006 (allowlist +
 	// denylist model) and 04-milestone-plan.md §M8.
 	RED *REDConfig `yaml:"red,omitempty"`
+
+	// Prometheus surfaces the upstream prometheusreceiver as a thin,
+	// curated scrape list — the single highest-leverage "cloud native"
+	// integration because it unlocks the entire Prometheus exporter
+	// ecosystem (node_exporter, kube-state-metrics, app /metrics
+	// endpoints, redis_exporter, nginx-prometheus-exporter, …) without
+	// compiling in a receiver per data source. nil / empty = no scrape
+	// jobs rendered (the prometheus receiver is omitted entirely).
+	// Anything beyond the curated per-job fields (relabeling, scrape
+	// auth, per-target TLS, service discovery) goes through
+	// overrides.receivers.prometheus.config.<...> per ADR-0012.
+	Prometheus *PrometheusConfig `yaml:"prometheus,omitempty"`
 }
+
+// PrometheusConfig is the curated scrape surface for the upstream
+// prometheusreceiver. It holds a list of static scrape jobs; the
+// expander renders them into receivers.prometheus.config.scrape_configs
+// and wires the receiver onto the metrics pipeline.
+type PrometheusConfig struct {
+	// ScrapeConfigs is the list of static scrape jobs. Empty (or a nil
+	// Prometheus block) renders no prometheus receiver at all.
+	ScrapeConfigs []PrometheusScrapeConfig `yaml:"scrape_configs,omitempty"`
+}
+
+// PrometheusScrapeConfig is one static Prometheus scrape job. It maps to
+// a single entry under the receiver's config.scrape_configs with one
+// static_configs target list. The curated field set covers the 90% case
+// (which endpoints, how often, what path/scheme); advanced knobs
+// (relabel_configs, basic_auth, tls_config, *_sd_configs) are reached
+// through overrides.receivers.prometheus per ADR-0012.
+type PrometheusScrapeConfig struct {
+	// JobName is the Prometheus job_name. Required, and unique within
+	// the scrape list — it becomes the job label on every scraped
+	// series and the receiver rejects duplicate job names at startup.
+	JobName string `yaml:"job_name"`
+
+	// Targets is the list of host:port endpoints scraped for this job
+	// (rendered as a single static_configs.targets list). Required;
+	// at least one target.
+	Targets []string `yaml:"targets"`
+
+	// ScrapeInterval is the per-job scrape cadence (e.g. "30s", "1m").
+	// Optional; applyDefaults fills DefaultPrometheusScrapeInterval
+	// when empty. Must be a valid Go duration the receiver accepts.
+	ScrapeInterval string `yaml:"scrape_interval,omitempty"`
+
+	// MetricsPath is the HTTP path scraped on each target. Optional;
+	// defaults to "/metrics" (the Prometheus convention) when empty.
+	MetricsPath string `yaml:"metrics_path,omitempty"`
+
+	// Scheme is the scrape scheme, "http" or "https". Optional;
+	// defaults to "http". https targets needing client certs / CA
+	// pinning configure tls_config through overrides:.
+	Scheme string `yaml:"scheme,omitempty"`
+}
+
+// DefaultPrometheusScrapeInterval is the per-job scrape cadence applied
+// when metrics.prometheus.scrape_configs[].scrape_interval is omitted.
+// Matches the Prometheus community default.
+const DefaultPrometheusScrapeInterval = "30s"
+
+// DefaultPrometheusMetricsPath is the scrape path applied when
+// metrics.prometheus.scrape_configs[].metrics_path is omitted.
+const DefaultPrometheusMetricsPath = "/metrics"
+
+// DefaultPrometheusScheme is the scrape scheme applied when
+// metrics.prometheus.scrape_configs[].scheme is omitted.
+const DefaultPrometheusScheme = "http"
 
 // REDConfig tunes the RED-from-spans connector. The defaults are
 // chosen to be "the dimension set Datadog / Honeycomb / Grafana Cloud

@@ -37,6 +37,14 @@ DaemonSet-based deployment of the Conduit OpenTelemetry agent on Kubernetes.
   `mountPropagation: HostToContainer`), `/var/log/pods`,
   `/var/log/containers`. Disable with `daemonset.hostMounts.enabled=false`
   for an OTLP-only relay (also set `conduit.profileMode=none`).
+- _Optional_ cluster-singleton collector (`clusterCollector.enabled=true`):
+  a single-replica `Deployment` running `profile.mode=k8s-cluster` that
+  adds cluster-state metrics (`k8s_cluster`) and Kubernetes events
+  (`k8sobjects`, emitted as logs) — the receivers that must run exactly
+  once per cluster. It reuses the same ServiceAccount and output; the
+  extra read-only RBAC (`events`, `resourcequotas`,
+  `replicationcontrollers`, `horizontalpodautoscalers`) switches on with
+  the flag. Off by default.
 
 ## Install (local source)
 
@@ -165,6 +173,8 @@ The full annotated reference is `values.yaml`. The most-used knobs:
 | `daemonset.tolerations` | `[{operator: Exists}]` | Wide-open by default so the agent runs on system / GPU nodes too. Tighten for high-security clusters. |
 | `daemonset.hostMounts.enabled` | `true` | Mount `/hostfs` (the host root, read-only, with `HostToContainer` propagation) plus `/var/log/pods` and `/var/log/containers` so hostmetrics + filelog/k8s see the node. Disable for an OTLP-only relay (also flip `conduit.profileMode` to `none`). |
 | `daemonset.runAsRoot` | `true` | Run the conduit container as UID 0. Required by the default profile because kubelet log directories are mode 0700 root-owned and `/proc/<pid>` for non-root pods isn't readable as a different unprivileged UID. Flip to `false` together with `profileMode=none`/`docker` to fall back to the image's baked-in nonroot UID 65532. |
+| `clusterCollector.enabled` | `false` | Deploy the single-replica cluster-singleton collector (`profile.mode=k8s-cluster`) for cluster-state metrics + Kubernetes events. Adds read-only RBAC for `events` / `resourcequotas` / `replicationcontrollers` / `horizontalpodautoscalers` (requires `rbac.create=true`). |
+| `clusterCollector.replicas` | `1` | Keep at 1 — `k8s_cluster` / `k8sobjects` are cluster-singletons; more replicas double-emit. |
 | `rbac.create` | `true` | Create the ClusterRole + ClusterRoleBinding the M5.B receivers and processor need (read-only access to pods / namespaces / nodes / services / apps + batch workload kinds). Disable when your cluster manages RBAC out-of-band; review `templates/clusterrole.yaml` to audit the exact rule set. |
 | `serviceAccount.create` | `true` | Set false to bind the DaemonSet to an external SA. |
 | `service.enabled` | `true` | Cluster-internal Service for OTLP ingress. |

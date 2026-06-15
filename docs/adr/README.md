@@ -47,6 +47,7 @@ open question matured into a decision. Once Accepted, ADRs are immutable.
 | [0020](adr-0020.md) | Zero-code application instrumentation via OBI as a Collector receiver |
 | [0021](adr-0021.md) | Profile-default service.name and resource-processor insert semantics |
 | [0022](adr-0022.md) | Scope RED derivation to request-like spans; stable + legacy HTTP semconv dimensions |
+| [0023](adr-0023.md) | Credentialed `integrations:` block for multi-target pull receivers (MSSQL first) |
 
 ## Adding a new ADR
 

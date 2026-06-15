@@ -1,0 +1,71 @@
+{{- if .Values.clusterCollector.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "conduit-agent.fullname" . }}-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conduit-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster
+data:
+  # Cluster-singleton conduit.yaml. profile.mode=k8s-cluster renders the
+  # k8s_cluster (metrics) + k8sobjects (events → logs) receivers. The
+  # OBI block is intentionally omitted: OBI is a per-node eBPF receiver
+  # and the agent rejects obi.enabled=true on this profile (so even if
+  # the DaemonSet has obi.enabled=true, the cluster collector stays
+  # clean). Output mirrors the DaemonSet's ConfigMap.
+  conduit.yaml: |
+    {{- if .Values.conduit.serviceName }}
+    service_name: {{ .Values.conduit.serviceName | quote }}
+    {{- else }}
+    # service_name omitted: applyDefaults() supplies "k8s-cluster" per
+    # ADR-0021. Override with conduit.serviceName in values.yaml.
+    {{- end }}
+    deployment_environment: {{ .Values.conduit.deploymentEnvironment | default "production" | quote }}
+
+    output:
+    {{- $mode := include "conduit-agent.outputMode" . }}
+    {{- if eq $mode "honeycomb" }}
+      mode: honeycomb
+      honeycomb:
+        api_key: ${env:HONEYCOMB_API_KEY}
+        endpoint: {{ .Values.honeycomb.endpoint | default "https://api.honeycomb.io" | quote }}
+    {{- else if eq $mode "otlp" }}
+      mode: otlp
+      otlp:
+        endpoint: {{ required "otlp.endpoint is required when otlp.enabled=true" .Values.otlp.endpoint | quote }}
+        {{- with .Values.otlp.headers }}
+        headers:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- if .Values.otlp.compression }}
+        compression: {{ .Values.otlp.compression | quote }}
+        {{- end }}
+        {{- if .Values.otlp.insecure }}
+        insecure: true
+        {{- end }}
+    {{- else }}
+      mode: gateway
+      gateway:
+        endpoint: {{ required "gateway.endpoint is required when gateway.enabled=true" .Values.gateway.endpoint | quote }}
+        {{- with .Values.gateway.headers }}
+        headers:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    {{- end }}
+
+    profile:
+      # Cluster-singleton receivers: k8s_cluster (metrics) + k8sobjects
+      # (events as logs). Deployed as a single replica by
+      # templates/cluster-deployment.yaml so this cluster-scoped data is
+      # collected once, not once per node.
+      mode: k8s-cluster
+
+    {{- with .Values.conduitOverrides }}
+    # Verbatim splice from values.conduitOverrides (ADR-0012). Shared
+    # with the DaemonSet's ConfigMap; scope cluster-only overrides with
+    # care since they apply to both workloads.
+    overrides:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end -}}

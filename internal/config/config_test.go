@@ -1088,6 +1088,7 @@ func TestParse_ServiceNameProfileDefault(t *testing.T) {
 		{"windows", "windows-host"},
 		{"docker", "docker-host"},
 		{"k8s", "k8s-cluster"},
+		{"k8s-cluster", "k8s-cluster"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.profile, func(t *testing.T) {
