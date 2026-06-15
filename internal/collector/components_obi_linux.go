@@ -47,5 +47,5 @@ func addPlatformReceivers(
 ) {
 	f := obicollector.NewFactory()
 	factories[f.Type()] = f
-	modules[f.Type()] = "go.opentelemetry.io/obi v0.8.0"
+	modules[f.Type()] = "go.opentelemetry.io/obi v0.9.0"
 }

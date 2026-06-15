@@ -264,7 +264,7 @@ kind-smoketest: kind-up kind-image kind-load kind-deploy kind-test ## Full kind 
 # the BPF bindings) suffices for module resolution without ever being
 # compiled.
 # ----------------------------------------------------------------------------
-OBI_VERSION ?= v0.8.0
+OBI_VERSION ?= v0.9.0
 OBI_REPO ?= https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation.git
 OBI_DIR := third_party/obi
 OBI_IMAGE ?= conduit:obi
