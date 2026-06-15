@@ -30,7 +30,7 @@ var (
 // source tree (go.mod / builder-config.yaml), not the build invocation, so
 // it lives in code rather than an ldflag. Bump it in lockstep with
 // builder-config.yaml and the Makefile OCB_VERSION (ADR-0014).
-const otelCollectorVersion = "0.151.0"
+const otelCollectorVersion = "0.152.0"
 
 // Version returns the Conduit version string (e.g. "1.2.3" or "0.0.0-dev").
 // Exported so the root command can surface it via `conduit --version`

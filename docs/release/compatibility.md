@@ -10,7 +10,7 @@ running" without grepping the Conduit binary.
 
 | Conduit version | otelcol-core | Builder (OCB) | Components | Status | Released |
 |---|---|---|---|---|---|
-| `v0.0.0-dev` | `v0.151.0` | `v0.151.0` | see [`builder-config.yaml`](../../builder-config.yaml) | pre-alpha | unreleased |
+| `v0.0.0-dev` | `v0.152.0` | `v0.152.0` | see [`builder-config.yaml`](../../builder-config.yaml) | pre-alpha | unreleased |
 
 The `Components` column points at the canonical receiver / processor /
 exporter / connector / extension list for the embedded distribution.

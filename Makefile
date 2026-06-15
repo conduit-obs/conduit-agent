@@ -18,7 +18,7 @@ GO_LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 # Pinned OpenTelemetry Collector Builder (OCB) version. Drives the upstream
 # OTel collector + contrib MINOR that ships in Conduit (see docs/adr/adr-0014).
 # Bump this in lockstep with the entries in builder-config.yaml.
-OCB_VERSION ?= 0.151.0
+OCB_VERSION ?= 0.152.0
 
 GO ?= go
 BIN_DIR := bin

@@ -476,7 +476,7 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 		// Trigger condition: JSON-looking string body. Combined into a
 		// single AND'd condition so OTTL short-circuits — calling
 		// IsMatch on a non-string body errors in OTTL rather than
-		// returning false (transform processor v0.151.0 lets the
+		// returning false (transform processor v0.152.0 lets the
 		// block run through that error), which is what blew up on
 		// journald entries during v0.0.1 smoke.
 		`IsString(body) and IsMatch(body, "^\\s*\\{")`,

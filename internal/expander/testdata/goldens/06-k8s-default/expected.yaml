@@ -382,7 +382,7 @@ processors:
         # body. Journald (and any other receiver that emits structured
         # bodies as pcommon.Map) hit this path; calling IsMatch on a
         # Map errors in OTTL rather than returning false, and the
-        # transform processor in contrib v0.151.0 can let a block
+        # transform processor in contrib v0.152.0 can let a block
         # execute through that error. The per-statement `where
         # IsString(body)` guard below is the second line of defense.
         conditions:
