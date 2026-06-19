@@ -147,7 +147,7 @@ jobs:
 
       - name: Run goreleaser
         # .goreleaser.yaml (version: 2) configures the artifact set + signing.
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> 2"
           args: release --clean ${{ steps.flags.outputs.extra }}
