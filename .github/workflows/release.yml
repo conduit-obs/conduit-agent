@@ -114,7 +114,7 @@ jobs:
         # Gated: a fork without the secret skips this and goreleaser's signs:
         # block is skipped below, so the rest of the release still rehearses.
         if: env.HAS_GPG == 'true'
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
