@@ -27,12 +27,12 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver v0.152.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/collector/component v1.58.0
-	go.opentelemetry.io/collector/confmap v1.58.0
+	go.opentelemetry.io/collector/confmap v1.60.0
 	go.opentelemetry.io/collector/confmap/provider/envprovider v1.58.0
 	go.opentelemetry.io/collector/confmap/provider/fileprovider v1.58.0
 	go.opentelemetry.io/collector/confmap/provider/httpprovider v1.58.0
 	go.opentelemetry.io/collector/confmap/provider/httpsprovider v1.58.0
-	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.58.0
+	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.60.0
 	go.opentelemetry.io/collector/connector v0.152.0
 	go.opentelemetry.io/collector/exporter v1.58.0
 	go.opentelemetry.io/collector/exporter/debugexporter v0.152.0
@@ -225,7 +225,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
-	github.com/knadh/koanf/v2 v2.3.4 // indirect
+	github.com/knadh/koanf/v2 v2.3.5 // indirect
 	github.com/kolo/xmlrpc v0.0.0-20220921171641-a4b6fa1dd06b // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-syslog/v4 v4.5.0 // indirect
@@ -366,7 +366,7 @@ require (
 	go.opentelemetry.io/collector/extension/extensionmiddleware v0.152.0 // indirect
 	go.opentelemetry.io/collector/extension/extensiontest v0.152.0 // indirect
 	go.opentelemetry.io/collector/extension/xextension v0.152.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.58.0 // indirect
+	go.opentelemetry.io/collector/featuregate v1.60.0 // indirect
 	go.opentelemetry.io/collector/filter v0.152.0 // indirect
 	go.opentelemetry.io/collector/internal/componentalias v0.152.0 // indirect
 	go.opentelemetry.io/collector/internal/fanoutconsumer v0.152.0 // indirect
