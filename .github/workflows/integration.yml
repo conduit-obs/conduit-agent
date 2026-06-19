@@ -270,7 +270,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.13.0
       - name: Install kind
@@ -301,7 +301,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.13.0
       - name: Install kind
