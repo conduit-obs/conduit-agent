@@ -91,7 +91,7 @@ type AgentConfig struct {
 	//       pipelines:
 	//         logs:
 	//           processors: [memory_limiter, resourcedetection, k8sattributes,
-	//                        resource, transform/logs, redaction, batch]
+	//                        resource, transform/logs, drain, redaction, batch]
 	Overrides map[string]any `yaml:"overrides,omitempty"`
 }
 

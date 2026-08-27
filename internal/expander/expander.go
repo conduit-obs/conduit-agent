@@ -92,6 +92,16 @@ type templateView struct {
 	MetricProcessors []string
 	LogProcessors    []string
 
+	// DrainBodyField is the drain processor's body_field setting: the
+	// top-level key of a structured (map) log body to feed the Drain
+	// clusterer instead of the map's string rendering. Set to "message"
+	// on the windows platform, whose windowseventlog receiver emits map
+	// bodies with the rendered message under that key. Empty everywhere
+	// else: linux's journald fragment promotes MESSAGE to a string body
+	// at the receiver (see internal/profiles/linux/logs.yaml), and every
+	// other default receiver already emits string bodies.
+	DrainBodyField string
+
 	// TraceExporters / MetricExporters / LogExporters list the exporter
 	// (and connector-as-exporter) IDs each pipeline writes to. The main
 	// traces pipeline is always just [ExporterName, "debug"] — RED no
@@ -391,6 +401,12 @@ func newView(cfg *config.AgentConfig, warnW io.Writer) (*templateView, error) {
 		v.MetricReceivers = append(v.MetricReceivers, ids.metrics...)
 		v.LogReceivers = append(v.LogReceivers, ids.logs...)
 	}
+	if platform == "windows" {
+		// windowseventlog emits structured map bodies; point the drain
+		// processor at the rendered message key (see the
+		// templateView.DrainBodyField comment).
+		v.DrainBodyField = "message"
+	}
 
 	// k8s-cluster profile: the cluster-singleton receiver set. Unlike
 	// the per-node k8s profile (loaded as fragments above), these two
@@ -583,6 +599,9 @@ const (
 //     metadata.
 //   - transform/logs is logs-only and runs after resource so it sees
 //     the canonical resource shape.
+//   - drain is logs-only and runs after transform/logs so templates are
+//     learned from redacted, restructured bodies (ADR-0024) — never
+//     from pre-redaction content.
 //   - batch is always last.
 func pipelineProcessorIDs(s pipelineSignal, k8sAttrs bool) []string {
 	out := []string{"memory_limiter", "resourcedetection"}
@@ -591,7 +610,7 @@ func pipelineProcessorIDs(s pipelineSignal, k8sAttrs bool) []string {
 	}
 	out = append(out, "resource")
 	if s == signalLogs {
-		out = append(out, "transform/logs")
+		out = append(out, "transform/logs", "drain")
 	}
 	out = append(out, "batch")
 	return out

@@ -48,6 +48,7 @@ open question matured into a decision. Once Accepted, ADRs are immutable.
 | [0021](adr-0021.md) | Profile-default service.name and resource-processor insert semantics |
 | [0022](adr-0022.md) | Scope RED derivation to request-like spans; stable + legacy HTTP semconv dimensions |
 | [0023](adr-0023.md) | Credentialed `integrations:` block for multi-target pull receivers (MSSQL first) |
+| [0024](adr-0024.md) | Structured logs by default: format lifting in `transform/logs`, Drain templating, message-as-body |
 
 ## Adding a new ADR
 

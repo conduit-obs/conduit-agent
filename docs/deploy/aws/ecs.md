@@ -4,7 +4,7 @@
 
 ## What you'll deploy
 
-A Conduit container running as a **sidecar** alongside your application container in the same ECS task. The application sends OTLP to `localhost:4317` (or `:4318`); Conduit batches, applies the standard processor chain (memory limiter → resource detection → transform/logs → batch), and forwards to Honeycomb.
+A Conduit container running as a **sidecar** alongside your application container in the same ECS task. The application sends OTLP to `localhost:4317` (or `:4318`); Conduit batches, applies the standard processor chain (memory limiter → resource detection → transform/logs → drain → batch), and forwards to Honeycomb.
 
 ```text
 +----------------- ECS task ------------------+
