@@ -292,7 +292,10 @@ obi-vendor: ## Clone go.opentelemetry.io/obi into third_party/obi/, generate its
 	@# -replace`) on every release tag. go.work is gitignored, so the
 	@# workspace only ever lives in working trees + CI runners.
 	@echo "Writing go.work to use ./$(OBI_DIR) (committed go.mod / go.sum left untouched)..."
-	@printf 'go 1.25.11\n\nuse (\n\t.\n\t./$(OBI_DIR)\n)\n' > go.work
+	@# The workspace go directive is derived from go.mod so a toolchain
+	@# bump there can never leave go.work behind (a stale, lower version
+	@# fails the build with "module requires go >= X").
+	@printf 'go %s\n\nuse (\n\t.\n\t./$(OBI_DIR)\n)\n' "$$(awk '/^go /{print $$2; exit}' go.mod)" > go.work
 	@echo "OBI vendored at $(OBI_DIR); go.work points the build at it. 'make build' on Linux now links OBI in."
 
 obi-clean: ## Remove go.work + go.work.sum so the toolchain falls back to the committed go.mod (idempotent)

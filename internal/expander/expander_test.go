@@ -399,7 +399,7 @@ func TestExpand_TransformLogs_LogsPipelineOnly(t *testing.T) {
 	if ti == -1 || di == -1 || bi == -1 {
 		t.Fatalf("logs pipeline missing processors; got %v", got)
 	}
-	if !(ti < di && di < bi) {
+	if ti >= di || di >= bi {
 		t.Errorf("logs pipeline must order transform/logs < drain < batch; got %v", got)
 	}
 	for _, p := range []string{"traces", "metrics"} {

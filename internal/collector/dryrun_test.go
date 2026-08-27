@@ -44,6 +44,26 @@ func TestDryRun_RenderedProfilesLoad(t *testing.T) {
 	}
 	for _, mode := range modes {
 		t.Run(string(mode), func(t *testing.T) {
+			// Two config-validation checks depend on the surrounding
+			// environment rather than the rendered YAML's shape: the
+			// docker/k8s hostmetrics fragments' root_path must be an
+			// existing directory (/hostfs is bind-mounted only in real
+			// deployments), and k8sattributes requires K8S_NODE_NAME
+			// (the chart wires it via the downward API). Shim both so
+			// DryRun still validates everything else those profiles
+			// render; the kind/helm and docker integration smokes
+			// exercise the real environments.
+			extra := ""
+			switch mode {
+			case config.ProfileModeDocker, config.ProfileModeK8s:
+				extra = fmt.Sprintf(`
+overrides:
+  receivers:
+    hostmetrics:
+      root_path: %s
+`, t.TempDir())
+				t.Setenv("K8S_NODE_NAME", "dryrun-node")
+			}
 			yamlDoc := fmt.Sprintf(`
 service_name: dryrun
 deployment_environment: test
@@ -53,7 +73,7 @@ output:
   mode: honeycomb
   honeycomb:
     api_key: hcaik_dryrun_test_key
-`, mode)
+%s`, mode, extra)
 			cfg, err := config.Parse(strings.NewReader(yamlDoc))
 			if err != nil {
 				t.Fatalf("config.Parse: %v", err)
