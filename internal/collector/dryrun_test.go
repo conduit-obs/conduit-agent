@@ -42,6 +42,13 @@ func TestDryRun_RenderedProfilesLoad(t *testing.T) {
 	case "windows":
 		modes = append(modes, config.ProfileModeWindows)
 	}
+	// One shared root_path shim for every subtest that needs one: the
+	// hostmetrics receiver records root_path in PROCESS-GLOBAL state
+	// (gopsutilenv) and rejects a second component configured with a
+	// different value ("inconsistent root_path configuration detected
+	// among components"), so per-subtest t.TempDir() values would
+	// conflict across the docker and k8s runs.
+	sharedRoot := t.TempDir()
 	for _, mode := range modes {
 		t.Run(string(mode), func(t *testing.T) {
 			// Two config-validation checks depend on the surrounding
@@ -61,7 +68,7 @@ overrides:
   receivers:
     hostmetrics:
       root_path: %s
-`, t.TempDir())
+`, sharedRoot)
 				t.Setenv("K8S_NODE_NAME", "dryrun-node")
 			}
 			yamlDoc := fmt.Sprintf(`
