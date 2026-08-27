@@ -42,22 +42,27 @@ receivers:
   # deep-merges overrides over the block emitted here. See
   # docs/adr/adr-0020.md.
   obi:
-    meter_provider:
-      # application: HTTP / gRPC / DB RED metrics + traces.
-      # Network features (per-connection metrics) are off by
-      # default because they're cardinality-explosive on busy
-      # hosts; operators who want them add `network` via
-      # overrides:.
-      features: [application]
+    # Metric-feature selection is deliberately NOT rendered: OBI's
+    # default is FeatureApplicationRED — exactly the export surface
+    # Conduit wants (HTTP / gRPC / DB RED metrics; network features
+    # stay off because they're cardinality-explosive on busy hosts).
+    # Earlier Conduit releases rendered a `meter_provider.features`
+    # block here, a key OBI never recognized (silently ignored by its
+    # mapstructure decode) — it only "worked" because application RED
+    # is the default anyway, so the honest config is no block at all.
+    # Operators who want network/stats features flip them with the
+    # OTEL_EBPF_METRICS_FEATURES env var on the agent process (OBI's
+    # v0.12 legacy YAML path does not coerce a list into its Features
+    # bitmask, so an overrides: block is not the way).
+    #
     # discovery.instrument is the modern selector form (Globs); it
     # supersedes the deprecated `services:` (Regex) form. At least
     # one entry is required to enable FeatureAppO11y — without it
     # OBI rejects the config at startup ("at least one of 'network',
     # 'application' or 'stats' features must be enabled"). The
-    # `meter_provider.features: [application]` line above is a
-    # downstream metric-export filter, NOT the on-switch for the
-    # feature itself; that distinction surprises every operator
-    # the first time, including us.
+    # feature selection above is a downstream metric-export filter,
+    # NOT the on-switch for instrumentation itself; that distinction
+    # surprises every operator the first time, including us.
     #
     # open_ports: 1-65535 matches every TCP-listening process on
     # the host / node, which is what zero-code instrumentation
@@ -502,6 +507,14 @@ processors:
     # bodies; template the human-readable message field instead of the
     # map's string rendering.
     body_field: {{ .DrainBodyField | q }}
+{{- end }}
+{{- if .PersistentQueueEnabled }}
+    # The operator already opted into on-disk state for the sending
+    # queue, so persist the Drain tree through the same file_storage
+    # extension — templates survive restarts instead of re-learning
+    # (and briefly re-diverging) from scratch.
+    storage: file_storage
+    save_interval: 5m
 {{- end }}
 {{- if .REDEnabled }}
   # filter/red_requests scopes RED derivation to request-like spans.

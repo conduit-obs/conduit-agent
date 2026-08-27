@@ -1459,8 +1459,6 @@ func TestExpand_OBI_K8sDefault(t *testing.T) {
 	}
 	mustContain(t, out, []string{
 		"\n  obi:\n",
-		"meter_provider:",
-		"features: [application]",
 		"discovery:",
 		"instrument:",
 		"open_ports: 1-65535",
@@ -1491,7 +1489,6 @@ func TestExpand_OBI_LinuxOmitsKubernetesAttrs(t *testing.T) {
 	}
 	mustContain(t, out, []string{
 		"\n  obi:\n",
-		"features: [application]",
 		"discovery:",
 		"instrument:",
 		"open_ports: 1-65535",

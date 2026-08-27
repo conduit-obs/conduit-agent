@@ -452,6 +452,12 @@ processors:
   drain:
     max_clusters: 1024
     extra_delimiters: ["="]
+    # The operator already opted into on-disk state for the sending
+    # queue, so persist the Drain tree through the same file_storage
+    # extension — templates survive restarts instead of re-learning
+    # (and briefly re-diverging) from scratch.
+    storage: file_storage
+    save_interval: 5m
   # filter/red_requests scopes RED derivation to request-like spans.
   # Without it the span_metrics connector would emit a request count
   # for EVERY span — including client, internal, and producer spans

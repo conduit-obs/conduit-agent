@@ -31,7 +31,7 @@ func CheckVersionCompat(ctx Context) []Result {
 	// constant via ldflags, the doctor reports the conduit version
 	// only. The placeholder string makes the M12 follow-up obvious
 	// to a code reader who comes back to this check later.
-	upstreamCore := "0.152.0"
+	upstreamCore := "0.158.0"
 	return []Result{{
 		ID:       cdt0403ID,
 		Title:    "version.compat",
