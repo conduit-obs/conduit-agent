@@ -72,6 +72,17 @@ receivers:
       - /var/log/*.[0-9]
       - /var/log/*.[0-9].gz
     start_at: end
+    # Entries start only on a timestamp-prefixed line; continuation
+    # lines (multi-line daemon output written raw, e.g. by apps that
+    # bypass rsyslog's control-character escaping) merge into their
+    # parent entry instead of shipping as one-fragment records. rsyslog
+    # escapes newlines to #012 by default, so on most distros every
+    # line matches this anchor and the splitter behaves exactly like
+    # plain newline splitting; the anchor only changes behavior for the
+    # raw multi-line case it fixes. Incomplete trailing entries flush
+    # after force_flush_period (default 500ms).
+    multiline:
+      line_start_pattern: '^(?:[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})'
     # Two-format parser. rsyslog ships two file templates and modern
     # Linux distros disagree on the default:
     #
@@ -88,10 +99,11 @@ receivers:
     # host (rsyslog can pick a template per ruleset), so we need both.
     #
     # The parsed timestamp + hostname are dropped because filelog's observed
-    # time and resourcedetection's host.name are authoritative. Lines that
+    # time and resourcedetection's host.name are authoritative. Entries that
     # match neither alternative are forwarded unparsed (on_error: send) so
-    # we never drop log data because of a format we haven't seen yet —
-    # multi-line stack traces and kernel ringbuffer continuations land here.
+    # we never drop log data because of a format we haven't seen yet. The
+    # message group is (?s:...) so a multi-line entry assembled by the
+    # multiline splitter above parses with its full block as the message.
     # After parsing, the message REPLACES the raw line as the record body
     # (ADR-0024): the syslog envelope (timestamp, hostname, process[pid])
     # is fully captured elsewhere — observed time, host.name, and the
@@ -100,7 +112,7 @@ receivers:
     # date as a literal token. Unparsed lines keep their raw body.
     operators:
       - type: regex_parser
-        regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
+        regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>(?s:.+))$'
         on_error: send
       - type: remove
         field: attributes.bsd_ts

@@ -88,6 +88,16 @@ func TestLinuxSyslogRegex_MatchesBothFormats(t *testing.T) {
 			wantPID:  "",
 			wantMsg:  "bound to 10.0.0.1",
 		},
+		{
+			// A raw multi-line block reassembled by the multiline
+			// splitter must parse with its full content as the message
+			// (the (?s:...) group).
+			name:     "multi-line entry reassembled by the splitter",
+			line:     "May  2 14:24:53 host01 myapp[7]: panic: boom\n\tat main.go:42\n\tat main.go:10",
+			wantProc: "myapp",
+			wantPID:  "7",
+			wantMsg:  "panic: boom\n\tat main.go:42\n\tat main.go:10",
+		},
 	}
 
 	for _, tc := range cases {
@@ -206,6 +216,18 @@ func TestDarwinSyslogRegex_MatchesBothFormats(t *testing.T) {
 			wantProc: "syslogd",
 			wantPID:  "340",
 			wantMsg:  "ASL Sender Statistics",
+		},
+		{
+			// softwareupdated dumps Objective-C dictionaries across
+			// multiple lines under one syslog header. The multiline
+			// splitter (line_start_pattern in the fragment) reassembles
+			// the block into one entry; the (?s:...) message group must
+			// then capture the whole block, continuation lines included.
+			name:     "multi-line dictionary dump reassembled by the splitter",
+			line:     "2026-08-27 08:07:42-04 andy softwareupdated[68624]: SUOSUServiceDaemon: progressInfo = {\n    progress = 100;\n    bytesDownloaded = 0;\n}",
+			wantProc: "softwareupdated",
+			wantPID:  "68624",
+			wantMsg:  "SUOSUServiceDaemon: progressInfo = {\n    progress = 100;\n    bytesDownloaded = 0;\n}",
 		},
 	}
 	for _, tc := range cases {
