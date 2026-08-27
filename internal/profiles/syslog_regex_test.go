@@ -141,10 +141,15 @@ func TestLinuxSyslogRegex_DoesNotMatch(t *testing.T) {
 }
 
 // TestDarwinSyslogRegex_MatchesBothFormats does the same for the macOS
-// fragment, which has its own format quirk (install.log writes
-// "YYYY-MM-DD HH:MM:SS-OF" without the colon-grouped offset rsyslog uses).
-// Pinning this here means a copy-paste from the linux fragment that drops
-// macOS install.log support fails loudly.
+// fragment, which has its own format quirks: install.log writes
+// "YYYY-MM-DD HH:MM:SS-OF" without the colon-grouped offset rsyslog
+// uses, and — unlike Linux syslog tags — macOS process names routinely
+// contain SPACES ("Jamf App Installers[8033]:"). V0.0.x shipped a
+// \S+-style process token that silently failed on every multi-word
+// sender, shipping those lines with no process/pid attributes at all.
+// The capture assertions here pin the multi-word fix, the optional
+// launchd "(sender-label)" group, and the earliest-terminator behavior
+// that keeps message-embedded colons in the message.
 func TestDarwinSyslogRegex_MatchesBothFormats(t *testing.T) {
 	body, err := Load("darwin", SignalSystemLogs)
 	if err != nil {
@@ -153,18 +158,97 @@ func TestDarwinSyslogRegex_MatchesBothFormats(t *testing.T) {
 	compiled := regexp.MustCompile(mustExtractFilelogRegex(t, body))
 
 	cases := []struct {
-		name string
-		line string
+		name       string
+		line       string
+		wantProc   string
+		wantPID    string
+		wantSender string
+		wantMsg    string
 	}{
-		{"system.log BSD", "May  1 13:59:13 andy-mac kernel: foo"},
-		{"install.log ISO+offset(no colon)", "2026-05-01 13:42:38-04 andy-mac softwareupdated[123]: starting check"},
+		{
+			name:     "system.log BSD, no pid",
+			line:     "May  1 13:59:13 andy-mac kernel: foo",
+			wantProc: "kernel",
+			wantMsg:  "foo",
+		},
+		{
+			name:     "install.log ISO+offset(no colon)",
+			line:     "2026-05-01 13:42:38-04 andy-mac softwareupdated[123]: starting check",
+			wantProc: "softwareupdated",
+			wantPID:  "123",
+			wantMsg:  "starting check",
+		},
+		{
+			name:     "multi-word process name (Jamf) with message-embedded colons",
+			line:     "2026-08-26 20:30:24-04 andy Jamf App Installers[8033]: 1Password 8 8.12.34: Change - Apps with similar bundleIdentifier: [name: 1Password, bundleIdentifier: com.1password.1password]",
+			wantProc: "Jamf App Installers",
+			wantPID:  "8033",
+			wantMsg:  "1Password 8 8.12.34: Change - Apps with similar bundleIdentifier: [name: 1Password, bundleIdentifier: com.1password.1password]",
+		},
+		{
+			name:     "message starting with bracketed Objective-C selector",
+			line:     "2026-08-26 20:24:19-04 andy loginwindow[379]: +[SUOSULoginCredentialPolicy currentLoginCredentialPolicy] = 1",
+			wantProc: "loginwindow",
+			wantPID:  "379",
+			wantMsg:  "+[SUOSULoginCredentialPolicy currentLoginCredentialPolicy] = 1",
+		},
+		{
+			name:       "launchd job label in parentheses",
+			line:       "May  1 13:59:13 andy-mac com.apple.xpc.launchd[1] (com.example.agent[456]): Service exited with abnormal code: 1",
+			wantProc:   "com.apple.xpc.launchd",
+			wantPID:    "1",
+			wantSender: "com.example.agent[456]",
+			wantMsg:    "Service exited with abnormal code: 1",
+		},
+		{
+			name:     "syslogd ASL statistics line",
+			line:     "Aug 26 20:24:16 andy syslogd[340]: ASL Sender Statistics",
+			wantProc: "syslogd",
+			wantPID:  "340",
+			wantMsg:  "ASL Sender Statistics",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !compiled.MatchString(tc.line) {
-				t.Errorf("regex did not match line:\n  %s", tc.line)
+			m := captureNamed(compiled, tc.line)
+			if m == nil {
+				t.Fatalf("regex did not match line:\n  %s", tc.line)
+			}
+			if got := m["process"]; got != tc.wantProc {
+				t.Errorf("process: got %q, want %q", got, tc.wantProc)
+			}
+			if got := m["pid"]; got != tc.wantPID {
+				t.Errorf("pid: got %q, want %q", got, tc.wantPID)
+			}
+			if got := m["sender"]; got != tc.wantSender {
+				t.Errorf("sender: got %q, want %q", got, tc.wantSender)
+			}
+			if got := m["message"]; got != tc.wantMsg {
+				t.Errorf("message: got %q, want %q", got, tc.wantMsg)
 			}
 		})
+	}
+}
+
+// TestDarwinSyslogRegex_DoesNotMatch pins the pass-through contract for
+// darwin: ASL repeat markers and continuation lines must be forwarded
+// raw (on_error: send), never partially chewed.
+func TestDarwinSyslogRegex_DoesNotMatch(t *testing.T) {
+	body, err := Load("darwin", SignalSystemLogs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	compiled := regexp.MustCompile(mustExtractFilelogRegex(t, body))
+
+	notSyslog := []string{
+		"",
+		"--- last message repeated 1 time ---",
+		"\tat com.example.Foo.bar(Foo.java:42)",
+	}
+	for _, line := range notSyslog {
+		if compiled.MatchString(line) {
+			t.Errorf("regex unexpectedly matched non-syslog line:\n  %q", line)
+		}
 	}
 }
 

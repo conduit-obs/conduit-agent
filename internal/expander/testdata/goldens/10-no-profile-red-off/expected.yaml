@@ -46,13 +46,15 @@ processors:
       - key: deployment.environment
         value: "ci"
         action: upsert
-  # transform/logs does four things, in four independent statement
-  # blocks (run in declaration order; each block's `where` predicate
-  # filters records independently):
+  # transform/logs structures common log formats into one column shape
+  # (ADR-0024), in seven independent statement blocks (run in
+  # declaration order; each block's conditions filter records
+  # independently):
   #
   #   1. (M9.B) Masks well-known secret patterns in body and
-  #      attributes["message"] BEFORE downstream processing copies them
-  #      into normalized_message. Default-on per ADR-0006's spirit and
+  #      attributes["message"] BEFORE any downstream stage (the lift
+  #      blocks below, drain templating) can copy them elsewhere.
+  #      Default-on per ADR-0006's spirit and
   #      [01-product-requirements.md] §FR-9 — even a Conduit operator who
   #      hasn't read the redaction docs should not accidentally ship
   #      plaintext credentials to Honeycomb / Datadog / Grafana Cloud.
@@ -67,31 +69,52 @@ processors:
   #      structlog, anything emitting `{"level":"info","msg":"..."}`)
   #      and lifts the well-known fields onto OTel semantic locations:
   #      trace_id / span_id (under three common naming conventions —
-  #      OTel-canonical, camelCase, logfmt-style), msg or message into
-  #      attributes["message"] so the normalized_message block has
-  #      data to work with, and severity (text + a five-level number
-  #      mapping). Gated on `IsString(body) and ^\\s*\\{`; non-JSON
-  #      bodies skip this block entirely. SDK-set trace ids and
-  #      severities are preserved by `trace_id.string == ""` /
+  #      OTel-canonical, camelCase, dotted), msg or message into
+  #      attributes["message"] so Honeycomb has a clean message column
+  #      next to the full JSON body, and severity_text (from level /
+  #      severity / log.level). Gated on `IsString(body) and ^\\s*\\{`;
+  #      non-JSON bodies skip this block entirely. SDK-set trace ids
+  #      and severities are preserved by `trace_id.string == ""` /
   #      `severity_number == UNSPECIFIED` guards.
   #
-  #   3. Computes a normalized_message attribute alongside the (now
-  #      redacted) message so Honeycomb can group similar log lines by
-  #      template — masking the high-cardinality bits (PIDs, IDs, UUIDs,
-  #      IPs, key=value values) that would otherwise make every line
-  #      unique. body is intentionally left untouched here. Only runs
-  #      when filelog's default parser populated attributes["message"]
-  #      (BSD or ISO syslog lines); OTLP logs from upstream apps and
-  #      journald entries pass through unmodified.
+  #   3. Parses logfmt-bodied logs (Go logrus text format, Heroku-style
+  #      key=value emitters) with the same lift targets as the JSON
+  #      block. Gated on the body STARTING with a key=value pair AND
+  #      containing a level/lvl/severity/msg/message pair, so prose
+  #      that merely contains an equals sign never pays the parse.
+  #      ParseKeyValue understands quoted values; a line that fails to
+  #      parse cleanly errors out of the statement and is skipped via
+  #      error_mode: ignore.
   #
-  #   4. Defaults severity to INFO when no upstream stage set one.
-  #      Filelog parses raw syslog lines and leaves severity_number=0
-  #      (UNSPECIFIED), which makes Honeycomb severity filters drop
-  #      those records. journald maps PRIORITY -> severity, and OTLP
-  #      logs from apps already carry severity, so the
-  #      where severity_number == SEVERITY_NUMBER_UNSPECIFIED guard
-  #      keeps us from overwriting either.
+  #   4. Maps klog/glog line headers ("E0826 20:24:19.123456 12 f.go:1]
+  #      msg" — kube-system components, etcd, and most Kubernetes
+  #      ecosystem daemons) onto severity_text via the leading I/W/E/F
+  #      marker.
+  #
+  #   5. Extracts a leading level token from plain-text bodies —
+  #      "ERROR: disk full", "[warn] retrying", Python logging's
+  #      "WARNING:root:msg" — into severity_text. Anchored at the start
+  #      of the body so a message that merely mentions the word "error"
+  #      is never re-leveled.
+  #
+  #   6. Normalizes severity_text into severity_number with one shared
+  #      case-insensitive mapping (trace/debug/info/warn/error/fatal
+  #      plus common aliases). Runs after every block that can set
+  #      severity_text (2-5) so JSON, logfmt, klog, and token-derived
+  #      severities all land on the same numeric scale; the
+  #      severity_number == UNSPECIFIED guard preserves SDK-set and
+  #      receiver-set (journald PRIORITY, Windows event level) values.
+  #
+  #   7. Defaults severity to INFO when no stage set one, so Honeycomb
+  #      severity filters never silently drop unparsed records.
+  #
+  # error_mode: ignore (rather than the upstream default, propagate)
+  # keeps one malformed record from failing its whole batch: a
+  # statement that errors — ParseJSON on truncated JSON, ParseKeyValue
+  # on an irregular key=value line — logs at debug and moves on,
+  # leaving that record unstructured but delivered.
   transform/logs:
+    error_mode: ignore
     log_statements:
       - context: log
         conditions:
@@ -141,49 +164,132 @@ processors:
           - 'set(cache["json"], ParseJSON(body)) where IsString(body)'
           # Trace / span id lift: three naming conventions are common
           # in the wild (OTel-canonical trace_id, camelCase traceId,
-          # logfmt-style trace.id). First match wins; gates on
-          # trace_id.string == "" preserve any value an upstream OTLP
-          # stage already set (so a correctly-correlating SDK isn't
-          # overwritten by the agent).
-          - 'set(trace_id.string, cache["json"]["trace_id"]) where cache["json"] != nil and IsString(cache["json"]["trace_id"]) and trace_id.string == ""'
-          - 'set(trace_id.string, cache["json"]["traceId"]) where cache["json"] != nil and IsString(cache["json"]["traceId"]) and trace_id.string == ""'
-          - 'set(trace_id.string, cache["json"]["trace.id"]) where cache["json"] != nil and IsString(cache["json"]["trace.id"]) and trace_id.string == ""'
-          - 'set(span_id.string, cache["json"]["span_id"]) where cache["json"] != nil and IsString(cache["json"]["span_id"]) and span_id.string == ""'
-          - 'set(span_id.string, cache["json"]["spanId"]) where cache["json"] != nil and IsString(cache["json"]["spanId"]) and span_id.string == ""'
-          - 'set(span_id.string, cache["json"]["span.id"]) where cache["json"] != nil and IsString(cache["json"]["span.id"]) and span_id.string == ""'
-          # Lift JSON's msg / message into attributes["message"] so the
-          # normalized_message block (next) has data to work with for
-          # JSON-bodied logs. attributes["message"] == nil guard keeps
-          # any value an upstream stage already set.
+          # dotted trace.id). First match wins; the all-zeros guards
+          # preserve any value an upstream OTLP stage already set (so a
+          # correctly-correlating SDK isn't overwritten by the agent).
+          # NB: an unset pdata trace/span id reads back through OTTL's
+          # .string accessor as the zero-hex string, NOT "" — comparing
+          # against "" silently disables the lift.
+          - 'set(trace_id.string, cache["json"]["trace_id"]) where cache["json"] != nil and IsString(cache["json"]["trace_id"]) and trace_id.string == "00000000000000000000000000000000"'
+          - 'set(trace_id.string, cache["json"]["traceId"]) where cache["json"] != nil and IsString(cache["json"]["traceId"]) and trace_id.string == "00000000000000000000000000000000"'
+          - 'set(trace_id.string, cache["json"]["trace.id"]) where cache["json"] != nil and IsString(cache["json"]["trace.id"]) and trace_id.string == "00000000000000000000000000000000"'
+          - 'set(span_id.string, cache["json"]["span_id"]) where cache["json"] != nil and IsString(cache["json"]["span_id"]) and span_id.string == "0000000000000000"'
+          - 'set(span_id.string, cache["json"]["spanId"]) where cache["json"] != nil and IsString(cache["json"]["spanId"]) and span_id.string == "0000000000000000"'
+          - 'set(span_id.string, cache["json"]["span.id"]) where cache["json"] != nil and IsString(cache["json"]["span.id"]) and span_id.string == "0000000000000000"'
+          # Lift JSON's msg / message into attributes["message"] so
+          # Honeycomb gets a clean message column next to the full
+          # JSON body. attributes["message"] == nil guard keeps any
+          # value an upstream stage already set.
           - 'set(attributes["message"], cache["json"]["msg"]) where cache["json"] != nil and IsString(cache["json"]["msg"]) and attributes["message"] == nil'
           - 'set(attributes["message"], cache["json"]["message"]) where cache["json"] != nil and IsString(cache["json"]["message"]) and attributes["message"] == nil'
-          # Severity lift: text first, then a documented five-level
-          # mapping for the number. Both gated on severity_number ==
-          # UNSPECIFIED so SDK-set severities and journald PRIORITY
-          # values pass through untouched.
+          # Severity text lift under the three common JSON key names.
+          # The shared text→number mapping block (block 6 below)
+          # normalizes whatever lands here. Gated on severity_number ==
+          # UNSPECIFIED so SDK-set severities pass through untouched.
           - 'set(severity_text, cache["json"]["level"]) where cache["json"] != nil and IsString(cache["json"]["level"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
           - 'set(severity_text, cache["json"]["severity"]) where cache["json"] != nil and IsString(cache["json"]["severity"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
-          - 'set(severity_number, SEVERITY_NUMBER_TRACE) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^trace$")'
-          - 'set(severity_number, SEVERITY_NUMBER_DEBUG) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^debug$")'
-          - 'set(severity_number, SEVERITY_NUMBER_INFO) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^info(rmational)?$")'
-          - 'set(severity_number, SEVERITY_NUMBER_WARN) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^warn(ing)?$")'
-          - 'set(severity_number, SEVERITY_NUMBER_ERROR) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^(error|err|severe)$")'
-          - 'set(severity_number, SEVERITY_NUMBER_FATAL) where severity_number == SEVERITY_NUMBER_UNSPECIFIED and IsMatch(severity_text, "(?i)^(fatal|critical|panic|emerg)$")'
+          - 'set(severity_text, cache["json"]["log.level"]) where cache["json"] != nil and IsString(cache["json"]["log.level"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
       - context: log
+        # logfmt lift (block 3). Same targets as the JSON block for
+        # key=value-bodied logs. The two IsMatch guards keep this off
+        # prose bodies: the line must START with a bare key=value pair
+        # and carry at least one of the level/message keys we lift.
         conditions:
-          - 'attributes["message"] != nil'
+          - 'IsString(body) and IsMatch(body, "^[A-Za-z_][A-Za-z0-9_.]*=") and IsMatch(body, "(^|\\s)(level|lvl|severity|msg|message)=")'
         statements:
-          - 'set(attributes["normalized_message"], attributes["message"])'
-          - 'replace_pattern(attributes["normalized_message"], "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", "*")'
-          - 'replace_pattern(attributes["normalized_message"], "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", "*.*.*.*")'
-          - 'replace_pattern(attributes["normalized_message"], "(\\w+)=[^\\s,]+", "$1=*")'
-          - 'replace_pattern(attributes["normalized_message"], "\\b\\d{4,}\\b", "*")'
+          - 'set(cache["kv"], ParseKeyValue(body)) where IsString(body)'
+          - 'set(trace_id.string, cache["kv"]["trace_id"]) where cache["kv"] != nil and IsString(cache["kv"]["trace_id"]) and trace_id.string == "00000000000000000000000000000000"'
+          - 'set(span_id.string, cache["kv"]["span_id"]) where cache["kv"] != nil and IsString(cache["kv"]["span_id"]) and span_id.string == "0000000000000000"'
+          - 'set(attributes["message"], cache["kv"]["msg"]) where cache["kv"] != nil and IsString(cache["kv"]["msg"]) and attributes["message"] == nil'
+          - 'set(attributes["message"], cache["kv"]["message"]) where cache["kv"] != nil and IsString(cache["kv"]["message"]) and attributes["message"] == nil'
+          - 'set(severity_text, cache["kv"]["level"]) where cache["kv"] != nil and IsString(cache["kv"]["level"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
+          - 'set(severity_text, cache["kv"]["lvl"]) where cache["kv"] != nil and IsString(cache["kv"]["lvl"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
+          - 'set(severity_text, cache["kv"]["severity"]) where cache["kv"] != nil and IsString(cache["kv"]["severity"]) and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
       - context: log
+        # klog/glog severity (block 4): the single-letter marker that
+        # opens every klog line header is the severity.
+        conditions:
+          - 'IsString(body) and IsMatch(body, "^[IWEF][0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}") and severity_number == SEVERITY_NUMBER_UNSPECIFIED'
+        statements:
+          - 'set(severity_text, "INFO") where IsMatch(body, "^I")'
+          - 'set(severity_text, "WARN") where IsMatch(body, "^W")'
+          - 'set(severity_text, "ERROR") where IsMatch(body, "^E")'
+          - 'set(severity_text, "FATAL") where IsMatch(body, "^F")'
+      - context: log
+        # Leading level token (block 5): "ERROR: disk full",
+        # "[warn] retrying", "WARNING:root:msg". Anchored to the start
+        # of the body — a message that merely mentions "error" mid-
+        # sentence is never re-leveled.
+        conditions:
+          - 'IsString(body) and severity_number == SEVERITY_NUMBER_UNSPECIFIED and severity_text == ""'
+        statements:
+          - 'set(severity_text, "TRACE") where IsMatch(body, "(?i)^\\s*\\[?trace[\\]:\\s]")'
+          - 'set(severity_text, "DEBUG") where severity_text == "" and IsMatch(body, "(?i)^\\s*\\[?debug[\\]:\\s]")'
+          - 'set(severity_text, "INFO") where severity_text == "" and IsMatch(body, "(?i)^\\s*\\[?info[\\]:\\s]")'
+          - 'set(severity_text, "WARN") where severity_text == "" and IsMatch(body, "(?i)^\\s*\\[?warn(ing)?[\\]:\\s]")'
+          - 'set(severity_text, "ERROR") where severity_text == "" and IsMatch(body, "(?i)^\\s*\\[?err(or)?[\\]:\\s]")'
+          - 'set(severity_text, "FATAL") where severity_text == "" and IsMatch(body, "(?i)^\\s*\\[?(fatal|critical|panic)[\\]:\\s]")'
+      - context: log
+        # Shared severity_text → severity_number normalization
+        # (block 6). One mapping for every lift path above; the
+        # UNSPECIFIED guard preserves numbers set by SDKs, journald
+        # PRIORITY parsing, and the Windows event level.
+        conditions:
+          - 'severity_number == SEVERITY_NUMBER_UNSPECIFIED and severity_text != ""'
+        statements:
+          - 'set(severity_number, SEVERITY_NUMBER_TRACE) where IsMatch(severity_text, "(?i)^trace$")'
+          - 'set(severity_number, SEVERITY_NUMBER_DEBUG) where IsMatch(severity_text, "(?i)^(debug|dbg)$")'
+          - 'set(severity_number, SEVERITY_NUMBER_INFO) where IsMatch(severity_text, "(?i)^(info(rmational)?|notice)$")'
+          - 'set(severity_number, SEVERITY_NUMBER_WARN) where IsMatch(severity_text, "(?i)^warn(ing)?$")'
+          - 'set(severity_number, SEVERITY_NUMBER_ERROR) where IsMatch(severity_text, "(?i)^(error|err|severe)$")'
+          - 'set(severity_number, SEVERITY_NUMBER_FATAL) where IsMatch(severity_text, "(?i)^(fatal|critical|crit|panic|emerg(ency)?|alert)$")'
+          # Canonicalize the text to the OTel level names so Honeycomb
+          # queries see one vocabulary ("WARN"), not each logger's
+          # casing ("warn" / "Warning" / "notice"). Scoped to this
+          # block's records (severity_number was UNSPECIFIED at block
+          # entry) so OTLP-supplied severity text is never rewritten.
+          - 'set(severity_text, "TRACE") where severity_number == SEVERITY_NUMBER_TRACE'
+          - 'set(severity_text, "DEBUG") where severity_number == SEVERITY_NUMBER_DEBUG'
+          - 'set(severity_text, "INFO") where severity_number == SEVERITY_NUMBER_INFO'
+          - 'set(severity_text, "WARN") where severity_number == SEVERITY_NUMBER_WARN'
+          - 'set(severity_text, "ERROR") where severity_number == SEVERITY_NUMBER_ERROR'
+          - 'set(severity_text, "FATAL") where severity_number == SEVERITY_NUMBER_FATAL'
+      - context: log
+        # Default severity (block 7): INFO for anything no stage above
+        # could classify, so Honeycomb severity filters never silently
+        # drop unparsed records.
         conditions:
           - 'severity_number == SEVERITY_NUMBER_UNSPECIFIED'
         statements:
           - 'set(severity_text, "INFO")'
           - 'set(severity_number, SEVERITY_NUMBER_INFO)'
+  # drain runs the Drain log-clustering algorithm over every record's
+  # (post-redaction, post-restructuring) body and annotates each with
+  # the cluster's template string as attributes["log.record.template"]
+  # ("Deleted <*> messages from <*>"), giving Honeycomb a stable
+  # GROUP BY column for "what log shapes are flooding me?" — the
+  # adaptive successor to the regex-masked normalized_message column
+  # (ADR-0024). Annotation-only: no record is mutated beyond the added
+  # attribute, and nothing is sampled or dropped.
+  #
+  # Runs AFTER transform/logs so templates are learned from redacted
+  # bodies — a credential masked by the M9.B block can never be frozen
+  # into a template — and after the profile fragments' receivers have
+  # replaced syslog envelopes with the bare message, so templates never
+  # embed today's date as a literal token.
+  #
+  # max_clusters bounds tree memory on pathological log diversity
+  # (least-recently-used clusters are evicted past the cap). "=" as an
+  # extra token delimiter keeps key names literal in templates for
+  # key=value content ("level <*>" instead of a fully-wildcarded
+  # token). The upstream defaults (tree_depth 4, merge_threshold 0.4,
+  # max_node_children 100) are the Drain-paper values and deliberately
+  # not restated here; tune via overrides.processors.drain per
+  # ADR-0012. The processor is alpha upstream — its knobs may shift
+  # across Conduit minors (pinned per ADR-0014).
+  drain:
+    max_clusters: 1024
+    extra_delimiters: ["="]
 
 exporters:
   otlphttp/honeycomb:
@@ -224,5 +330,5 @@ service:
     logs:
       receivers:
         - otlp
-      processors: [memory_limiter, resourcedetection, resource, transform/logs, batch]
+      processors: [memory_limiter, resourcedetection, resource, transform/logs, drain, batch]
       exporters: [otlphttp/honeycomb, debug]

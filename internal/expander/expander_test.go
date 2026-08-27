@@ -377,10 +377,10 @@ func TestExpand_ResourceDetectionAlwaysOn(t *testing.T) {
 	}
 }
 
-// transform/logs computes attributes["normalized_message"] from the
-// filelog-parsed message, masking high-cardinality bits (UUIDs, IPs,
-// key=value values, 4+ digit numbers) so Honeycomb can group similar
-// log lines by template. Always wired, but only into the logs pipeline.
+// transform/logs structures common log formats and drain annotates each
+// record with its cluster template (ADR-0024). Both are always wired,
+// but only into the logs pipeline — and drain must run AFTER
+// transform/logs so templates are learned from redacted bodies.
 func TestExpand_TransformLogs_LogsPipelineOnly(t *testing.T) {
 	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
 	if err != nil {
@@ -388,16 +388,59 @@ func TestExpand_TransformLogs_LogsPipelineOnly(t *testing.T) {
 	}
 	mustContain(t, out, []string{
 		`transform/logs:`,
-		`normalized_message`,
-		`replace_pattern`,
+		`error_mode: ignore`,
+		`drain:`,
+		`max_clusters: 1024`,
 	})
-	if got := pipelineProcessors(t, out, "logs"); !contains(got, "transform/logs") {
-		t.Errorf("logs pipeline missing transform/logs processor; got %v", got)
+	got := pipelineProcessors(t, out, "logs")
+	ti := indexOf(got, "transform/logs")
+	di := indexOf(got, "drain")
+	bi := indexOf(got, "batch")
+	if ti == -1 || di == -1 || bi == -1 {
+		t.Fatalf("logs pipeline missing processors; got %v", got)
+	}
+	if !(ti < di && di < bi) {
+		t.Errorf("logs pipeline must order transform/logs < drain < batch; got %v", got)
 	}
 	for _, p := range []string{"traces", "metrics"} {
-		if got := pipelineProcessors(t, out, p); contains(got, "transform/logs") {
-			t.Errorf("%s pipeline must NOT include transform/logs; got %v", p, got)
+		got := pipelineProcessors(t, out, p)
+		for _, proc := range []string{"transform/logs", "drain"} {
+			if contains(got, proc) {
+				t.Errorf("%s pipeline must NOT include %s; got %v", p, proc, got)
+			}
 		}
+	}
+}
+
+// indexOf returns the index of s in list, or -1.
+func indexOf(list []string, s string) int {
+	for i, v := range list {
+		if v == s {
+			return i
+		}
+	}
+	return -1
+}
+
+// The drain processor's body_field is a platform decision: the
+// windowseventlog receiver emits structured map bodies with the
+// rendered message under "message", so the windows platform templates
+// that key. Every other platform's default receivers emit string
+// bodies (journald's map body is reshaped to a string body by the
+// linux fragment's move operators), so no body_field is rendered.
+func TestExpand_Drain_BodyFieldPerPlatform(t *testing.T) {
+	winOut, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeWindows}))
+	if err != nil {
+		t.Fatalf("Expand(windows): %v", err)
+	}
+	mustContain(t, winOut, []string{`body_field: "message"`})
+
+	linOut, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeLinux}))
+	if err != nil {
+		t.Fatalf("Expand(linux): %v", err)
+	}
+	if strings.Contains(linOut, "body_field") {
+		t.Errorf("linux render must not set drain body_field")
 	}
 }
 
@@ -456,17 +499,17 @@ func TestExpand_HostMetrics_EnablesUtilizationMetrics(t *testing.T) {
 //
 // The test asserts:
 //
-//  1. The block sits between redaction (M9.B) and normalized_message
-//     so it sees redacted JSON and can populate attributes["message"]
-//     for the normalized_message block to consume.
+//  1. The block runs after redaction (M9.B) so it sees redacted JSON
+//     when it populates attributes["message"], and before the shared
+//     severity normalization block that maps its severity_text.
 //  2. Three trace_id naming conventions and three span_id naming
 //     conventions are handled.
 //  3. Empty-string gates protect SDK-set values from being
 //     overwritten — checked by looking for the
 //     `trace_id.string == ""` predicate.
-//  4. The five-level severity_number mapping covers
+//  4. The shared six-level severity_number mapping covers
 //     trace/debug/info/warn/error/fatal with the documented
-//     regex aliases (info/informational, warn/warning, etc.).
+//     regex aliases (info/informational/notice, warn/warning, etc.).
 func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
 	if err != nil {
@@ -495,50 +538,94 @@ func TestExpand_TransformLogs_JSONParsingBlock(t *testing.T) {
 		`cache["json"]["span_id"]`,
 		`cache["json"]["spanId"]`,
 		`cache["json"]["span.id"]`,
-		// SDK-set values must survive the lift — the empty-string
-		// guard is the contract that makes that work.
-		`trace_id.string == ""`,
-		`span_id.string == ""`,
-		// Message lift so normalized_message has data on JSON bodies.
+		// SDK-set values must survive the lift — the all-zeros guard
+		// is the contract that makes that work. (An unset pdata id
+		// reads back as the zero-hex string, not "", so comparing
+		// against "" would silently disable the lift.)
+		`trace_id.string == "00000000000000000000000000000000"`,
+		`span_id.string == "0000000000000000"`,
+		// Message lift so Honeycomb gets a clean message column on
+		// JSON bodies.
 		`cache["json"]["msg"]`,
 		`cache["json"]["message"]`,
-		// Severity-number mapping.
+		// ECS-style severity key alongside level / severity.
+		`cache["json"]["log.level"]`,
+		// Shared severity-number mapping (block 6).
 		`SEVERITY_NUMBER_TRACE`,
 		`SEVERITY_NUMBER_DEBUG`,
 		`SEVERITY_NUMBER_INFO`,
 		`SEVERITY_NUMBER_WARN`,
 		`SEVERITY_NUMBER_ERROR`,
 		`SEVERITY_NUMBER_FATAL`,
-		`(?i)^info(rmational)?$`,
+		`(?i)^(info(rmational)?|notice)$`,
 		`(?i)^warn(ing)?$`,
 		`(?i)^(error|err|severe)$`,
-		`(?i)^(fatal|critical|panic|emerg)$`,
+		`(?i)^(fatal|critical|crit|panic|emerg(ency)?|alert)$`,
 	})
-	// Block ordering: redaction → JSON lift → normalized_message.
-	// JSON lift sits in the middle so normalized_message inherits
-	// the (a) redacted body and (b) message attribute populated
-	// from the JSON's "msg" / "message" field.
+	// Block ordering: redaction → JSON lift → severity normalization.
+	// JSON lift sits in the middle so its message attribute comes from
+	// the redacted body, and its severity_text is normalized to a
+	// number by the shared mapping block downstream.
 	redIdx := strings.Index(out, "AKIA****REDACTED****")
 	jsonIdx := strings.Index(out, `set(cache["json"], ParseJSON(body)) where IsString(body)`)
-	normIdx := strings.Index(out, `set(attributes["normalized_message"]`)
-	if redIdx == -1 || jsonIdx == -1 || normIdx == -1 {
-		t.Fatalf("block markers missing: redaction=%d json=%d normalized=%d", redIdx, jsonIdx, normIdx)
+	sevIdx := strings.Index(out, `set(severity_number, SEVERITY_NUMBER_TRACE)`)
+	if redIdx == -1 || jsonIdx == -1 || sevIdx == -1 {
+		t.Fatalf("block markers missing: redaction=%d json=%d severity=%d", redIdx, jsonIdx, sevIdx)
 	}
-	if redIdx >= jsonIdx || jsonIdx >= normIdx {
-		t.Errorf("expected redaction(%d) < json(%d) < normalized(%d)", redIdx, jsonIdx, normIdx)
+	if redIdx >= jsonIdx || jsonIdx >= sevIdx {
+		t.Errorf("expected redaction(%d) < json(%d) < severity mapping(%d)", redIdx, jsonIdx, sevIdx)
 	}
 }
 
+// transform/logs's logfmt block mirrors the JSON lift for key=value
+// bodies (Go logrus text format and other logfmt emitters). Gated on
+// the body starting with a key=value pair AND containing one of the
+// level/message keys we lift, so prose containing "=" never parses.
+func TestExpand_TransformLogs_LogfmtParsingBlock(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		`IsMatch(body, "^[A-Za-z_][A-Za-z0-9_.]*=")`,
+		`(^|\\s)(level|lvl|severity|msg|message)=`,
+		`set(cache["kv"], ParseKeyValue(body)) where IsString(body)`,
+		`cache["kv"]["trace_id"]`,
+		`cache["kv"]["span_id"]`,
+		`cache["kv"]["msg"]`,
+		`cache["kv"]["level"]`,
+	})
+}
+
+// transform/logs's klog block maps the leading I/W/E/F marker of
+// klog/glog line headers onto severity_text, and the leading-token
+// block classifies "ERROR: ..." / "[warn] ..." prose prefixes. Both
+// feed the shared severity normalization block.
+func TestExpand_TransformLogs_KlogAndLeadingTokenSeverity(t *testing.T) {
+	out, err := Expand(honeycomb(&config.Profile{Mode: config.ProfileModeNone}))
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	mustContain(t, out, []string{
+		// klog header gate + one representative marker mapping.
+		`^[IWEF][0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}`,
+		`set(severity_text, "ERROR") where IsMatch(body, "^E")`,
+		// Leading level token, anchored at start-of-body.
+		`(?i)^\\s*\\[?warn(ing)?[\\]:\\s]`,
+		`(?i)^\\s*\\[?err(or)?[\\]:\\s]`,
+	})
+}
+
 // transform/logs's M9.B redaction block masks well-known credential
-// patterns in body and attributes["message"] BEFORE normalized_message
-// is computed. The contract is "default-on, narrow regex set" —
-// AKIA-prefixed AWS access key ids, JWTs, and a small set of
-// case-insensitive credential key=value patterns. This test locks in:
+// patterns in body and attributes["message"] BEFORE any downstream
+// stage (the lift blocks, drain templating) can copy them elsewhere.
+// The contract is "default-on, narrow regex set" — AKIA-prefixed AWS
+// access key ids, JWTs, and a small set of case-insensitive credential
+// key=value patterns. This test locks in:
 //
-//  1. The redaction block precedes the normalized_message block in
-//     the rendered YAML so the latter sees redacted input (otherwise
-//     a user grouping by normalized_message would still see
-//     plaintext credentials in the data).
+//  1. The redaction block precedes every lift block and the drain
+//     processor config in the rendered YAML, so grouping columns are
+//     always computed from redacted input.
 //  2. Every documented pattern is present.
 //  3. The operator-facing replacement string ("****REDACTED****") is
 //     stable so downstream queries can detect "this record was
@@ -563,17 +650,16 @@ func TestExpand_TransformLogs_DefaultRedactionBlock(t *testing.T) {
 		`(?i)(password|passwd|secret|token|apikey|api_key|access_key|aws_secret_access_key|authorization)`,
 		`$1=****REDACTED****`,
 	})
-	// The redaction block must come BEFORE the normalized_message
-	// block — otherwise normalized_message inherits the original
-	// (un-redacted) message and our templating effort leaks credentials
-	// into the grouping column.
+	// The redaction block must come BEFORE the lift blocks — otherwise
+	// attributes["message"] (and, downstream, drain's templates) would
+	// inherit un-redacted content into the grouping columns.
 	redIdx := strings.Index(out, "AKIA****REDACTED****")
-	normIdx := strings.Index(out, `set(attributes["normalized_message"]`)
-	if redIdx == -1 || normIdx == -1 {
-		t.Fatalf("missing expected statements; redaction=%d normalized=%d", redIdx, normIdx)
+	kvIdx := strings.Index(out, `set(cache["kv"], ParseKeyValue(body))`)
+	if redIdx == -1 || kvIdx == -1 {
+		t.Fatalf("missing expected statements; redaction=%d logfmt=%d", redIdx, kvIdx)
 	}
-	if redIdx >= normIdx {
-		t.Errorf("redaction block must precede normalized_message block; got redaction at %d, normalized at %d", redIdx, normIdx)
+	if redIdx >= kvIdx {
+		t.Errorf("redaction block must precede the logfmt lift block; got redaction at %d, logfmt at %d", redIdx, kvIdx)
 	}
 }
 

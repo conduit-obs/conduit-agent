@@ -40,6 +40,10 @@ processors:
   - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.152.0
   - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.152.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.152.0
+  # drain (alpha upstream) annotates every log record with its Drain-
+  # cluster template string — the always-on grouping column for the logs
+  # pipeline on every distribution (ADR-0024).
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/drainprocessor v0.152.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.152.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.152.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.152.0

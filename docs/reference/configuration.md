@@ -388,6 +388,7 @@ overrides:
           - k8sattributes
           - resource
           - transform/logs
+          - drain
           - redaction
           - batch
 ```

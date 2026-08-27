@@ -57,14 +57,21 @@ keeps a multi-host fleet from drowning in unique lines.
 
 | Column | Source |
 |---|---|
-| `severity_text`, `severity_number` | filelog severity_parser, or default to INFO via the always-on `transform/logs` block in the base template |
-| `process` | regex_parser inside the platform's filelog operators |
-| `pid` | regex_parser, when available in the source format |
-| `message` | regex_parser; the parsed body, distinct from the raw `body` |
-| `normalized_message` | always-on, computed by `transform/logs` from `message` |
+| `severity_text`, `severity_number` | receiver-native severity (journald PRIORITY, Windows event level), the format-lift blocks in `transform/logs` (JSON / logfmt / klog / leading level token), or default INFO |
+| `process` | regex_parser inside the platform's filelog operators (journald: `SYSLOG_IDENTIFIER`) |
+| `pid` | regex_parser, when available in the source format; omitted (not empty) when the line has none |
+| `message` | set only when the body is structured (JSON / logfmt): the lifted human-readable message next to the full structured `body` |
+| `log.record.template` | always-on, computed by the `drain` processor from the (post-redaction) body — the stable grouping column (ADR-0024) |
 
-`body` is preserved verbatim — `normalized_message` is the masked-template
-sibling, never a replacement.
+`body` carries the log **message**: for syslog-family sources the
+platform's operators parse the envelope (timestamp, hostname,
+process[pid]) into attributes / authoritative fields and promote the
+message to the body, because the envelope duplicates data the record
+already carries (observed time, `host.name`) and would poison drain
+templates with the current date as a literal token. Lines that don't
+match the platform parser keep their raw body verbatim (`on_error:
+send`), and structured bodies (JSON logs, Windows event maps) are never
+rewritten — the lifted `message` attribute sits alongside them.
 
 ## 2. Repository deliverables per platform
 

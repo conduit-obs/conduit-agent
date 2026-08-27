@@ -47,6 +47,12 @@ filelog/system:
   # match neither alternative are forwarded unparsed (on_error: send) so
   # we never drop log data because of a format we haven't seen yet —
   # multi-line stack traces and kernel ringbuffer continuations land here.
+  # After parsing, the message REPLACES the raw line as the record body
+  # (ADR-0024): the syslog envelope (timestamp, hostname, process[pid])
+  # is fully captured elsewhere — observed time, host.name, and the
+  # process/pid attributes — so keeping it in body only shows operators
+  # a redundant prefix and poisons drain templating with the current
+  # date as a literal token. Unparsed lines keep their raw body.
   operators:
     - type: regex_parser
       regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
@@ -57,6 +63,63 @@ filelog/system:
     - type: remove
       field: attributes.log_host
       if: 'attributes.log_host != nil'
+    # regex_parser materializes the optional pid group as an empty-
+    # string attribute on lines without one (e.g. "kernel: ..."); drop
+    # it so records only carry pid when the line actually had one.
+    - type: remove
+      field: attributes.pid
+      if: 'attributes.pid == ""'
+    - type: move
+      from: attributes.message
+      to: body
+      if: 'attributes.message != nil'
 
+# journald scrapes the systemd journal. Raw journal entries arrive as a
+# ~40-key map body (_BOOT_ID, _CMDLINE, __CURSOR, ...) — shipping that
+# verbatim buries the message under audit-trail noise and bloats every
+# record, so the operators below reshape each entry to match the
+# filelog/system column contract (PROFILE_SPEC.md §1):
+#
+#   - severity from PRIORITY. The journald receiver does NOT map the
+#     syslog priority to OTel severity on its own (the stanza input
+#     leaves severity unset), so without this every kernel error would
+#     be defaulted to INFO by transform/logs. Mapping follows syslog
+#     semantics: 0-2 (emerg/alert/crit) → fatal, 3 → error,
+#     4 → warn, 5-6 (notice/info) → info, 7 → debug.
+#   - process      ← SYSLOG_IDENTIFIER (same column filelog parsing fills)
+#   - pid          ← _PID
+#   - systemd.unit ← _SYSTEMD_UNIT, the axis operators actually
+#     investigate by on a systemd host ("which unit is spamming?")
+#   - body         ← MESSAGE (the human-readable line). This is the last
+#     move: it replaces the map body wholesale, discarding the remaining
+#     journal bookkeeping fields. Operators who need the full journal
+#     record (e.g. for audit pipelines) override receivers.journald
+#     per ADR-0012.
 journald:
   units: []
+  operators:
+    - type: severity_parser
+      parse_from: body.PRIORITY
+      if: 'body.PRIORITY != nil'
+      mapping:
+        fatal: ["0", "1", "2"]
+        error: "3"
+        warn: "4"
+        info: ["5", "6"]
+        debug: "7"
+    - type: move
+      from: body.SYSLOG_IDENTIFIER
+      to: attributes.process
+      if: 'body.SYSLOG_IDENTIFIER != nil'
+    - type: move
+      from: body._PID
+      to: attributes.pid
+      if: 'body._PID != nil'
+    - type: move
+      from: body._SYSTEMD_UNIT
+      to: attributes["systemd.unit"]
+      if: 'body._SYSTEMD_UNIT != nil'
+    - type: move
+      from: body.MESSAGE
+      to: body
+      if: 'body.MESSAGE != nil'

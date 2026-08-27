@@ -13,21 +13,41 @@ filelog/system:
     - /var/log/system.log
     - /var/log/install.log
   start_at: end
-  # Default parser. Two regex alternatives cover both formats macOS
+  # Default parser. Two timestamp alternatives cover both formats macOS
   # writes:
   #   system.log  : BSD syslog            "May  1 13:59:13 andy proc[123]: msg"
   #   install.log : ISO+offset (no colon) "2026-05-01 13:42:38-04 andy proc[123]: msg"
-  # Lines that don't match (rare continuation lines) are passed through
+  #
+  # The sender-name field is where macOS diverges hard from Linux syslog
+  # and where the V0.0.x regex silently failed: macOS process names
+  # routinely contain SPACES ("Jamf App Installers[8033]:", "Google
+  # Drive[512]:"), which a \S+-style token can never match, so every
+  # such line shipped unparsed with no process/pid attributes. The
+  # process group below is a bounded lazy match that stops at the first
+  # "[pid]:", "(sender):", or bare ":" terminator, so multi-word names
+  # parse correctly while message-embedded colons stay in the message.
+  #
+  # launchd-style lines carry a second identifier in parentheses —
+  # "com.apple.xpc.launchd[1] (com.example.agent[456]): Service exited"
+  # — captured as `sender` (the per-job label) so agent/daemon lifecycle
+  # noise can be grouped by the job that caused it, not just launchd.
+  #
+  # Lines that match neither alternative (ASL "--- last message repeated
+  # N times ---" markers, rare continuation lines) are passed through
   # unparsed because of on_error: send.
   #
-  # We strip the parsed timestamp + hostname after extraction: filelog's
-  # observed time and the resource attribute host.name (set by
-  # resourcedetection) are the authoritative values, and keeping the
-  # syslog copies of either just adds Honeycomb columns nobody breaks
-  # down by.
+  # After parsing, the message REPLACES the raw line as the record body:
+  # filelog's observed time and resourcedetection's host.name are the
+  # authoritative copies of the syslog envelope's timestamp + hostname,
+  # and process/pid/sender live on as attributes — so the envelope
+  # carries zero information the record doesn't already have, and
+  # keeping it in body would (a) show operators a redundant prefix on
+  # every Honeycomb row and (b) poison drain templating with the
+  # current date as a literal token (see ADR-0024). Unparsed lines keep
+  # their raw body untouched.
   operators:
     - type: regex_parser
-      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[+-]\d{2})\s+(?P<log_host>\S+)\s+(?P<process>[^\[\s:]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.+)$'
+      regex: '^(?P<bsd_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[+-]\d{2})\s+(?P<log_host>\S+)\s+(?P<process>.{1,128}?)(?:\[(?P<pid>\d+)\])?(?:\s+\((?P<sender>[^()]+)\))?:\s+(?P<message>.+)$'
       on_error: send
     - type: remove
       field: attributes.bsd_ts
@@ -35,3 +55,16 @@ filelog/system:
     - type: remove
       field: attributes.log_host
       if: 'attributes.log_host != nil'
+    # regex_parser materializes optional named groups that didn't
+    # participate in the match as empty-string attributes; drop those
+    # so records only carry pid / sender when the line actually had one.
+    - type: remove
+      field: attributes.pid
+      if: 'attributes.pid == ""'
+    - type: remove
+      field: attributes.sender
+      if: 'attributes.sender == ""'
+    - type: move
+      from: attributes.message
+      to: body
+      if: 'attributes.message != nil'

@@ -455,6 +455,8 @@ github.com/invopop/jsonschema v0.13.0 h1:KvpoAJWEjR3uD9Kbm2HWJmqsEaHt8lBUpd0qHcI
 github.com/invopop/jsonschema v0.13.0/go.mod h1:ffZ5Km5SWWRAIN6wbDXItl95euhFz2uON45H2qjYt+0=
 github.com/ionos-cloud/sdk-go/v6 v6.3.6 h1:l/TtKgdQ1wUH3DDe2SfFD78AW+TJWdEbDpQhHkWd6CM=
 github.com/ionos-cloud/sdk-go/v6 v6.3.6/go.mod h1:nUGHP4kZHAZngCVr4v6C8nuargFrtvt7GrzH/hqn7c4=
+github.com/jaeyo/go-drain3 v0.1.2 h1:fY21wgbwhzzaoRNSQ+6HVbpYw4KkAYjCFCoERYozIJ8=
+github.com/jaeyo/go-drain3 v0.1.2/go.mod h1:6xr/0Dmq3BglAIZ5tDKiQiZvXevU1rE+qpfYZic9h9Y=
 github.com/jarcoal/httpmock v1.4.1 h1:0Ju+VCFuARfFlhVXFc2HxlcQkfB+Xq12/EotHko+x2A=
 github.com/jarcoal/httpmock v1.4.1/go.mod h1:ftW1xULwo+j0R0JJkJIIi7UKigZUXCLLanykgjwBXL0=
 github.com/jcmturner/aescts/v2 v2.0.0 h1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=
@@ -681,6 +683,8 @@ github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributespr
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.152.0/go.mod h1:O9M7Yio+bStZLg/5Y0N6l7hUKuC5uDMGOqQKGmi2G08=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.152.0 h1:E8hPKQC0hQEd5zK/39pw0fP5YI4Wy7Znt17kpB2wXOs=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.152.0/go.mod h1:ZJqDSclotTyNe4uhoia5VASEFP1LSpp4mTWNG9ei4uo=
+github.com/open-telemetry/opentelemetry-collector-contrib/processor/drainprocessor v0.152.0 h1:rUWcoRqS0CRK0vDezRixaxu0xDPtYQl+0uVRxC+PrUc=
+github.com/open-telemetry/opentelemetry-collector-contrib/processor/drainprocessor v0.152.0/go.mod h1:3+sJYUyPdqkZFwnHKggvLKGPjrPBDaYthnDCLgUaokE=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.152.0 h1:q9guLF7uevIOEqbSo0ftAWu9ndNWMmtfwJ32dqSLgbc=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.152.0/go.mod h1:Xxe1zO39JS3OAOZdfi8P3LC07JYXdozMf9FXmtA+J+w=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.152.0 h1:QGnkMZaqd+lFEYsS69vddPerLvRjjCbwiZx+aLYb7M0=

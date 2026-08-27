@@ -8,6 +8,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/pprofextension v0.152.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.152.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.152.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/drainprocessor v0.152.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.152.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.152.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.152.0
@@ -216,6 +217,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/ionos-cloud/sdk-go/v6 v6.3.6 // indirect
+	github.com/jaeyo/go-drain3 v0.1.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/jpillora/backoff v1.0.0 // indirect
