@@ -18,7 +18,7 @@ GO_LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 # Pinned OpenTelemetry Collector Builder (OCB) version. Drives the upstream
 # OTel collector + contrib MINOR that ships in Conduit (see docs/adr/adr-0014).
 # Bump this in lockstep with the entries in builder-config.yaml.
-OCB_VERSION ?= 0.152.0
+OCB_VERSION ?= 0.158.0
 
 GO ?= go
 BIN_DIR := bin
@@ -264,7 +264,7 @@ kind-smoketest: kind-up kind-image kind-load kind-deploy kind-test ## Full kind 
 # the BPF bindings) suffices for module resolution without ever being
 # compiled.
 # ----------------------------------------------------------------------------
-OBI_VERSION ?= v0.9.0
+OBI_VERSION ?= v0.12.2
 OBI_REPO ?= https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation.git
 OBI_DIR := third_party/obi
 OBI_IMAGE ?= conduit:obi

@@ -171,29 +171,10 @@ jobs:
         # operators see the trend; release-blocking happens in
         # release.yml when the tag is cut.
         #
-        # ALLOWLIST maps known-unfixable findings to the change that
-        # removes them. govulncheck has no native suppression, so we
-        # diff its called-symbol findings (JSON stream) against the
-        # list and fail on anything new. Keep this list SHORT and
-        # remove entries the moment the named fix lands.
-        #
-        #   GO-2026-6238  cilium/ebpf < v0.22.0, reachable only through
-        #                 OBI's Linux eBPF paths. OBI v0.9.0 calls
-        #                 btf.FlushKernelSpec, which v0.22.0 removed —
-        #                 the fix is the OBI bump to >= v0.11.0
-        #                 (tracked follow-up), not a dep bump here.
+        # If a finding is ever genuinely unfixable pending an upstream
+        # bump, git history has an allowlist pattern for this step
+        # (removed when the OBI v0.12 upgrade cleared GO-2026-6238) —
+        # prefer fixing the dependency.
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          ALLOWLIST='GO-2026-6238'
-          govulncheck -format json ./... > vulns.json || true
-          # Called-symbol findings only (trace has a function frame) —
-          # the same set the default output counts as "affects your code".
-          called=$(jq -r 'select(.finding != null and .finding.trace[0].function != null) | .finding.osv' vulns.json | sort -u)
-          new=$(echo "$called" | grep -vxF "$ALLOWLIST" | grep -v '^$' || true)
-          if [ -n "$new" ]; then
-            echo "govulncheck: findings outside the allowlist:"
-            echo "$new"
-            govulncheck ./... || true
-            exit 1
-          fi
-          echo "govulncheck: no findings outside the allowlist ($ALLOWLIST)"
+          govulncheck ./...
