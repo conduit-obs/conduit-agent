@@ -51,23 +51,35 @@ func TestDryRun_RenderedProfilesLoad(t *testing.T) {
 	sharedRoot := t.TempDir()
 	for _, mode := range modes {
 		t.Run(string(mode), func(t *testing.T) {
-			// Two config-validation checks depend on the surrounding
-			// environment rather than the rendered YAML's shape: the
-			// docker/k8s hostmetrics fragments' root_path must be an
-			// existing directory (/hostfs is bind-mounted only in real
-			// deployments), and k8sattributes requires K8S_NODE_NAME
-			// (the chart wires it via the downward API). Shim both so
-			// DryRun still validates everything else those profiles
-			// render; the kind/helm and docker integration smokes
-			// exercise the real environments.
+			// Three config/creation-time checks depend on the
+			// surrounding environment rather than the rendered YAML's
+			// shape: the docker/k8s hostmetrics fragments' root_path
+			// must be an existing directory (/hostfs is bind-mounted
+			// only in real deployments), k8sattributes requires
+			// K8S_NODE_NAME (the chart wires it via the downward API),
+			// and kubeletstats' serviceAccount auth eagerly reads the
+			// in-cluster CA cert from its hardcoded /var/run/secrets
+			// path at component creation. Shim all three so DryRun
+			// still validates everything else those profiles render;
+			// the kind/helm and docker integration smokes exercise the
+			// real environments.
 			extra := ""
 			switch mode {
-			case config.ProfileModeDocker, config.ProfileModeK8s:
+			case config.ProfileModeDocker:
 				extra = fmt.Sprintf(`
 overrides:
   receivers:
     hostmetrics:
       root_path: %s
+`, sharedRoot)
+			case config.ProfileModeK8s:
+				extra = fmt.Sprintf(`
+overrides:
+  receivers:
+    hostmetrics:
+      root_path: %s
+    kubeletstats:
+      auth_type: none
 `, sharedRoot)
 				t.Setenv("K8S_NODE_NAME", "dryrun-node")
 			}
